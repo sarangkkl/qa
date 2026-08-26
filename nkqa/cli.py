@@ -56,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
 	learn = sub.add_parser('learn', help='ingest app knowledge from an annotated doc (md + screenshots)')
 	learn.add_argument('path', help='markdown file with embedded images, or a folder of screenshots')
 
+	reflect = sub.add_parser('reflect', help='update the appmap from a past run (auto after runs by default)')
+	reflect.add_argument('run', help='run dir name under runs/')
+
 	sub.add_parser('list', help='list all recorded runs')
 	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
@@ -239,6 +242,18 @@ def main() -> None:
 		ws = require_workspace()
 		cfg = config_mod.load(ws.config_file)
 		sys.exit(asyncio.run(learn_cmd(ws, cfg, args.path)))
+	if args.command == 'reflect':
+		from nkqa.reflector import reflect as reflect_cmd
+
+		ws = require_workspace()
+		run_dir = ws.runs_dir / args.run
+		if not run_dir.is_dir():
+			print(f'No run "{args.run}" under {ws.runs_dir}/. See:  qa list')
+			sys.exit(2)
+		cfg = config_mod.load(ws.config_file)
+		written = asyncio.run(reflect_cmd(ws, cfg, run_dir))
+		print(f'🧠 appmap updated: {", ".join(written)}' if written else 'Nothing new learned from this run.')
+		sys.exit(0)
 	if args.command == 'plan':
 		from nkqa.planner import plan as plan_cmd
 

@@ -148,6 +148,11 @@ async def _record(
 		else:
 			print('\nNo step completed, so there is nothing to save for this test.')
 
+	if agent.history.history:
+		from nkqa.reflector import auto_reflect
+
+		await auto_reflect(ws, config, run_dir)
+
 	if run_error is None:
 		try:
 			from browser_use.agent.variable_detector import detect_variables_in_history

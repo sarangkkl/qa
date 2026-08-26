@@ -124,4 +124,8 @@ async def _execute(
 	print(f'\n{icon} {scenario.id}: {verdict.upper()}')
 	print(f'📄 Report:   {run_dir / "results.md"}')
 	print(f'▶️  Replay:   qa replay {run_dir.name}')
+
+	from nkqa.reflector import auto_reflect
+
+	await auto_reflect(ws, config, run_dir)
 	return 0 if verdict == 'pass' else 1
