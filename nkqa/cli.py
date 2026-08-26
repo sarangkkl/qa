@@ -59,6 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
 	reflect = sub.add_parser('reflect', help='update the appmap from a past run (auto after runs by default)')
 	reflect.add_argument('run', help='run dir name under runs/')
 
+	crawl = sub.add_parser('crawl', help='explore the live app read-only and enrich the appmap (optional)')
+	crawl.add_argument('--pages', type=int, default=0, help='page budget (default: appmap.crawl_pages)')
+	crawl.add_argument('--model', default=None, metavar='MODEL', help='executor model override')
+
 	sub.add_parser('list', help='list all recorded runs')
 	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
@@ -254,6 +258,13 @@ def main() -> None:
 		written = asyncio.run(reflect_cmd(ws, cfg, run_dir))
 		print(f'🧠 appmap updated: {", ".join(written)}' if written else 'Nothing new learned from this run.')
 		sys.exit(0)
+	if args.command == 'crawl':
+		from nkqa.crawler import crawl as crawl_cmd
+
+		ws = require_workspace()
+		cfg = config_mod.load(ws.config_file)
+		hitl = HumanInTheLoop(ws.permissions_file)
+		sys.exit(asyncio.run(crawl_cmd(ws, cfg, hitl, args.pages or cfg.crawl_pages, args.model)))
 	if args.command == 'plan':
 		from nkqa.planner import plan as plan_cmd
 
