@@ -2,3 +2,6 @@ venv
 kt
 qa_output
 .env
+__pycache__/
+*.egg-info/
+.pytest_cache/

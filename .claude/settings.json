@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/gaurav/Documents/dreams/nkqa/browser-use/docs)",
+      "Bash(mv /Users/gaurav/Documents/dreams/nkqa/browser-use/ARCHITECTURE.md /Users/gaurav/Documents/dreams/nkqa/browser-use/docs/ARCHITECTURE.md)",
+      "Bash(/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/bin/pip show *)",
+      "Bash(/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/bin/python --version)",
+      "Bash(venv/bin/ruff format *)",
+      "Bash(./check.sh)",
+      "Bash(venv/bin/pip install *)",
+      "Bash(venv/bin/qa version *)",
+      "Bash(jq '.hooks = {\"PostToolUse\": [{\"matcher\": \"Write|Edit\", \"hooks\": [{\"type\": \"command\", \"command\": \"\\\\\"$CLAUDE_PROJECT_DIR\\\\\"/venv/bin/python \\\\\"$CLAUDE_PROJECT_DIR\\\\\"/.claude/hooks/check_edit.py\", \"timeout\": 120, \"statusMessage\": \"ruff + pyright on edited file\"}]}]}' .claude/settings.json)",
+      "Bash(mv .claude/settings.json.tmp .claude/settings.json)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
