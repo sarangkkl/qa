@@ -68,9 +68,10 @@ preconditions:
 ```
 
 Lifecycle: `qa plan` writes drafts → human reviews/edits (PR is the intended review
-surface) → status flipped to `approved` → `qa run` executes → evidence folder created
-under `runs/`, with `results.md` linking video/screenshots to specific step numbers →
-post-run reflection updates `appmap/` (§5).
+surface) → `qa approve` records approval **bound to a content hash** of the scenario
+(any later edit invalidates it; the runner refuses stale approvals until re-approved) →
+`qa run` executes → evidence folder created under `runs/`, with `results.md` linking
+video/screenshots to specific step numbers → post-run reflection updates `appmap/` (§5).
 
 ## 4. Agents and their roles
 
