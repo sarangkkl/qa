@@ -20,7 +20,8 @@
       "Bash(venv/bin/python -c \"from browser_use.browser.video_recorder import VideoRecorder; print\\('video deps OK'\\)\")",
       "Bash(venv/bin/pip list *)",
       "Bash(venv/bin/python -c \"import browser_use.browser.video_recorder as vr; print\\([n for n in dir\\(vr\\) if 'ecord' in n]\\)\")",
-      "Bash(venv/bin/python -c ' *)"
+      "Bash(venv/bin/python -c ' *)",
+      "Bash(npx --version)"
     ]
   }
 }
