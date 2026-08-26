@@ -21,6 +21,8 @@ This repo is the product, NOT the browser-use library (that comes from pip, see 
 - Anything irreversible in a browser run goes through `request_permission`.
 
 ## Change discipline
+- Commits and PRs carry NO AI attribution: no Co-Authored-By trailers, no "Generated with
+  Claude Code" lines. Plain messages authored as the repo owner.
 - No new dependencies without explicit user approval. Current: browser-use, pyyaml (from Phase 1); dev: ruff, pyright, pytest.
 - Preserve CLI exit codes (0 pass, 1 fail, 2 usage) — CI depends on them.
 - Behavior changes to recording/replay require updating docs/.
