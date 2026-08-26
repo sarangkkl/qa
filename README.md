@@ -19,6 +19,7 @@ Put API keys in `.env` (e.g. `ANTHROPIC_API_KEY=...`).
 
 ```bash
 qa init                          # create a QA workspace in the current directory
+qa learn appdoc.md               # build the appmap from an annotated doc (screenshots + text)
 qa plan "the checkout flow"      # planner drafts scenarios from app knowledge (no browser)
 qa plan --ticket PROJ-123        # plan from a Jira story's acceptance criteria (via MCP)
 qa scenarios                     # list scenarios: status + last verdict
@@ -29,7 +30,16 @@ qa list                          # all recorded runs
 qa replay <run-name>             # rerun WITHOUT the LLM - free and repeatable
 qa replay --all                  # whole suite (CI mode; exit 0 = all passed)
 qa file-bug <run> [--step N]     # file a Jira bug from a failed run - always human-confirmed
+qa reflect <run>                 # update the appmap from a past run (automatic after runs)
+qa crawl                         # optional: explore the live app read-only to enrich the map
+qa models                        # roles -> models -> providers -> are the API keys set?
 ```
+
+The appmap (`appmap/`) is the product's memory: plain markdown in git, no vector DB.
+It's seeded by `qa learn` from a document you write - screenshots with a line or two
+about each screen, roles, and flows - then grows automatically after every run
+(git-committed as `appmap: learned from <run>`; disable with `appmap.auto_reflect: false`).
+The planner reads all of it, so everything the map knows shows up in better scenarios.
 
 Extra tools for the agent come from MCP servers listed in `config.yaml` (`mcp:` section):
 any server's tools can be exposed to the executor (test-data seeders, OTP readers, ...).

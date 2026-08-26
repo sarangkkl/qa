@@ -5,3 +5,4 @@ qa_output
 __pycache__/
 *.egg-info/
 .pytest_cache/
+knowledge
