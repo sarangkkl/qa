@@ -27,6 +27,13 @@ def test_gather_context(tmp_path: Path) -> None:
 	assert 'checkout-flow/purchase' in ctx and 'do NOT duplicate' in ctx
 
 
+def test_write_drafts_stamps_ticket(tmp_path: Path) -> None:
+	ws = workspace.create(tmp_path)
+	written, _ = planner.write_drafts(ws, [make_draft()], ticket='PROJ-123')
+	reloaded = scenarios.find(ws.scenarios_dir, written[0].id)
+	assert reloaded is not None and reloaded.ticket == 'PROJ-123'
+
+
 def test_write_drafts_slugifies_and_skips_existing(tmp_path: Path) -> None:
 	ws = workspace.create(tmp_path)
 	written, skipped = planner.write_drafts(ws, [make_draft()])

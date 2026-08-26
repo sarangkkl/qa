@@ -8,9 +8,10 @@ Phase 2 turns `qa run` into scenario execution; this becomes `qa explore`.
 
 import asyncio
 import contextlib
+from pathlib import Path
 from urllib.parse import urlparse
 
-from browser_use import Agent
+from browser_use import Agent, Tools
 from browser_use.browser import BrowserProfile
 from pydantic import BaseModel
 
@@ -73,10 +74,31 @@ async def run_freeform(
 	run_dir = ws.run_dir(name)
 	run_dir.mkdir(parents=True, exist_ok=True)
 
+	from nkqa.mcp import MCPRuntime, executor_servers
+
+	tools = hitl.build_tools()
+	async with MCPRuntime(executor_servers(config)) as mcp_runtime:
+		extra_tools = await mcp_runtime.register_executor_tools(tools)
+		if extra_tools:
+			print(f'🔧 Extra tools from MCP: {", ".join(extra_tools)}')
+		return await _record(ws, config, hitl, url, focus, name, run_dir, tools, model_override)
+
+
+async def _record(
+	ws: Workspace,
+	config: Config,
+	hitl: HumanInTheLoop,
+	url: str,
+	focus: str,
+	name: str,
+	run_dir: 'Path',
+	tools: 'Tools[None]',
+	model_override: str | None,
+) -> int:
 	agent: Agent[None, BaseModel] = Agent(
 		task=f'Test the web application at {url}. Focus on: {focus}.',
 		llm=resolve_llm(config, 'executor', model_override),
-		tools=hitl.build_tools(),
+		tools=tools,
 		extend_system_message=QA_RULES,
 		sensitive_data=hitl.secrets,  # same dict ask_credential writes into
 		fallback_llm=resolve_llm(config, 'fallback'),  # cross-provider failover

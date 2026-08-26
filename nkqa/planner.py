@@ -62,7 +62,9 @@ def gather_context(ws: Workspace, config: Config) -> str:
 	return '\n\n'.join(parts)
 
 
-def write_drafts(ws: Workspace, drafts: list[DraftScenario], force: bool = False) -> tuple[list[Scenario], list[str]]:
+def write_drafts(
+	ws: Workspace, drafts: list[DraftScenario], force: bool = False, ticket: str = ''
+) -> tuple[list[Scenario], list[str]]:
 	"""Serialize drafts to scenario files. Returns (written, skipped_ids)."""
 	written: list[Scenario] = []
 	skipped: list[str] = []
@@ -76,6 +78,7 @@ def write_drafts(ws: Workspace, drafts: list[DraftScenario], force: bool = False
 			id=sid,
 			path=path,
 			title=d.title,
+			ticket=ticket,
 			tags=d.tags,
 			preconditions=d.preconditions,
 			steps=[Step(st.action, st.expect) for st in d.steps],
@@ -86,7 +89,7 @@ def write_drafts(ws: Workspace, drafts: list[DraftScenario], force: bool = False
 	return written, skipped
 
 
-async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: bool = False) -> int:
+async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: bool = False, ticket: str = '') -> int:
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
 		print("The planner needs a real model: set models.planner in config.yaml (e.g. 'smart').")
@@ -94,7 +97,18 @@ async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: b
 
 	from browser_use.llm.messages import SystemMessage, UserMessage
 
-	prompt = gather_context(ws, config) + f'\n\n### Ask\n{ask}'
+	ticket_section = ''
+	if ticket:
+		from nkqa.jira import fetch_issue, jira_server
+		from nkqa.mcp import MCPRuntime
+
+		spec = jira_server(config)
+		print(f'🎫 Fetching {ticket} via MCP server "{spec.name}"...')
+		async with MCPRuntime([spec]) as rt:
+			ticket_section = f'\n\n### Ticket {ticket}\n{await fetch_issue(rt, spec, ticket)}'
+		ask = ask or f"verify that ticket {ticket}'s acceptance criteria are met"
+
+	prompt = gather_context(ws, config) + ticket_section + f'\n\n### Ask\n{ask}'
 	if area:
 		prompt += f'\nPut all scenarios under the area "{slugify(area)}".'
 	print(f'🧠 Planning with {config.models.get("planner")} (no browser - knowledge only)...')
@@ -103,7 +117,7 @@ async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: b
 	)
 	output = response.completion
 
-	written, skipped = write_drafts(ws, output.scenarios, force)
+	written, skipped = write_drafts(ws, output.scenarios, force, ticket)
 	for s in written:
 		print(f'📝 draft  {s.id}  ({len(s.steps)} steps) - {s.title}')
 	for sid in skipped:

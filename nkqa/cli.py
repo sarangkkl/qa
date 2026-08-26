@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import sys
+from datetime import datetime
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
@@ -22,9 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
 	sub.add_parser('init', help='create a QA workspace in the current directory')
 
 	plan = sub.add_parser('plan', help='draft test scenarios from app knowledge (no browser)')
-	plan.add_argument('ask', help='what to test, e.g. "the checkout flow"')
+	plan.add_argument('ask', nargs='?', default='', help='what to test, e.g. "the checkout flow"')
+	plan.add_argument('--ticket', default='', metavar='KEY', help='plan from a Jira ticket, e.g. PROJ-123')
 	plan.add_argument('--area', default='', help='force all drafts under this scenario area')
 	plan.add_argument('--force', action='store_true', help='overwrite existing scenario files')
+
+	bug = sub.add_parser('file-bug', help='file a Jira bug from a failed run (human-instructed only)')
+	bug.add_argument('run', help='run dir name under runs/, e.g. checkout-coupon--20260826-2238')
+	bug.add_argument('--step', type=int, default=0, help='which failed step to file (when several failed)')
+	bug.add_argument('--project', default='', metavar='KEY', help='Jira project key (default: jira.project in config)')
 
 	run = sub.add_parser('run', help='execute an approved scenario')
 	run.add_argument('id', nargs='?', default='', help='scenario id, e.g. checkout/coupon')
@@ -116,6 +123,63 @@ def cmd_approve(ws: Workspace, scenario_id: str) -> int:
 	return 0
 
 
+def cmd_file_bug(ws: Workspace, run_name: str, step: int, project: str) -> int:
+	from nkqa.execution.report import read_results
+	from nkqa.jira import compose_bug, create_bug, failed_steps, jira_server
+	from nkqa.mcp import MCPRuntime
+
+	run_dir = ws.runs_dir / run_name
+	if not run_dir.is_dir():
+		print(f'No run "{run_name}" under {ws.runs_dir}/. See:  qa list')
+		return 2
+	record = read_results(run_dir)
+	if record is None:
+		print('This run has no results.json - only scenario runs can file bugs.')
+		return 2
+	scenario = scenarios_mod.find(ws.scenarios_dir, record.scenario_id)
+	if scenario is None:
+		print(f'Scenario "{record.scenario_id}" no longer exists; cannot compose the bug.')
+		return 2
+	failures = failed_steps(record)
+	if not failures:
+		print('Every step passed in this run - nothing to file. 🎉')
+		return 0
+	if step:
+		failures = [f for f in failures if f.step == step]
+		if not failures:
+			print(f'Step {step} did not fail in this run.')
+			return 2
+	if len(failures) > 1:
+		print('Several steps failed - pick one with --step:')
+		for f in failures:
+			print(f'  --step {f.step}  [{f.verdict}] {f.note[:100]}')
+		return 2
+	failure = failures[0]
+
+	cfg = config_mod.load(ws.config_file)
+	project = project or cfg.jira_project
+	if not project:
+		print('No Jira project key: pass --project KEY or set jira.project in config.yaml.')
+		return 2
+	spec = jira_server(cfg)
+
+	summary, description = compose_bug(scenario, record, failure, run_dir, cfg.base_url)
+	print(f'\n──── bug preview ({project}) ────\n\n{summary}\n\n{description}\n\n────')
+	if input('File this bug? [y/N]: ').strip().lower() != 'y':
+		print('Not filed.')
+		return 1
+
+	async def _file() -> str:
+		async with MCPRuntime([spec]) as rt:
+			return await create_bug(rt, spec, project, summary, description)
+
+	key = asyncio.run(_file())
+	with (run_dir / 'results.md').open('a', encoding='utf-8') as fh:
+		fh.write(f'\nFiled: {key} ({datetime.now():%Y-%m-%d %H:%M})\n')
+	print(f'🐞 Filed {key}. Recorded in {run_dir / "results.md"}.')
+	return 0
+
+
 def cmd_run(ws: Workspace, scenario_id: str, model: str | None) -> int:
 	from nkqa.execution.scenario_runner import run_scenario
 
@@ -145,9 +209,14 @@ def main() -> None:
 	if args.command == 'plan':
 		from nkqa.planner import plan as plan_cmd
 
+		if not args.ask and not args.ticket:
+			print('Tell me what to plan:  qa plan "<ask>"  and/or  qa plan --ticket PROJ-123')
+			sys.exit(2)
 		ws = require_workspace()
 		cfg = config_mod.load(ws.config_file)
-		sys.exit(asyncio.run(plan_cmd(ws, cfg, args.ask, args.area, args.force)))
+		sys.exit(asyncio.run(plan_cmd(ws, cfg, args.ask, args.area, args.force, args.ticket)))
+	if args.command == 'file-bug':
+		sys.exit(cmd_file_bug(require_workspace(), args.run, args.step, args.project))
 	if args.command == 'scenarios':
 		sys.exit(cmd_scenarios(require_workspace()))
 	if args.command == 'approve':

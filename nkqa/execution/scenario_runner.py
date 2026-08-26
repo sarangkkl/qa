@@ -10,13 +10,15 @@ refused here, no matter how they were invoked.
 import asyncio
 import contextlib
 from datetime import datetime
+from pathlib import Path
 
-from browser_use import Agent
+from browser_use import Agent, Tools
 from browser_use.browser import BrowserProfile
 
 from nkqa.config import Config
 from nkqa.execution.report import ScenarioResult, write_results
 from nkqa.hitl import HumanInTheLoop
+from nkqa.mcp import MCPRuntime, executor_servers
 from nkqa.models import resolve_llm
 from nkqa.prompts import QA_RULES
 from nkqa.scenarios import Scenario
@@ -69,10 +71,27 @@ async def run_scenario(
 	run_dir.mkdir(parents=True, exist_ok=True)
 	print(f'▶️  Running scenario "{scenario.title}" ({len(scenario.steps)} steps). 🎬 Recording video.\n')
 
+	tools = hitl.build_tools()
+	async with MCPRuntime(executor_servers(config)) as mcp_runtime:
+		extra_tools = await mcp_runtime.register_executor_tools(tools)
+		if extra_tools:
+			print(f'🔧 Extra tools from MCP: {", ".join(extra_tools)}')
+		return await _execute(ws, config, hitl, scenario, run_dir, tools, model_override)
+
+
+async def _execute(
+	ws: Workspace,
+	config: Config,
+	hitl: HumanInTheLoop,
+	scenario: Scenario,
+	run_dir: 'Path',
+	tools: 'Tools[None]',
+	model_override: str | None,
+) -> int:
 	agent: Agent[None, ScenarioResult] = Agent(
 		task=build_task(scenario, config.base_url),
 		llm=resolve_llm(config, 'executor', model_override),
-		tools=hitl.build_tools(),
+		tools=tools,
 		extend_system_message=QA_RULES,
 		sensitive_data=hitl.secrets,
 		fallback_llm=resolve_llm(config, 'fallback'),

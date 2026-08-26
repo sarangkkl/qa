@@ -1,5 +1,6 @@
-"""Verdict models and results.md rendering for scenario runs."""
+"""Verdict models, results.md rendering, and results.json persistence for scenario runs."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -68,7 +69,33 @@ def write_results(run_dir: Path, scenario: Scenario, result: ScenarioResult | No
 		'- [LLM transcript](conversation/)',
 	]
 	(run_dir / 'results.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+	(run_dir / 'results.json').write_text(
+		json.dumps(
+			{
+				'scenario_id': scenario.id,
+				'verdict': verdict,
+				'approved_hash': scenario.approved_hash,
+				'result': result.model_dump() if result else None,
+			},
+			indent=1,
+		),
+		encoding='utf-8',
+	)
 	return verdict
+
+
+class RunRecord(BaseModel):
+	scenario_id: str
+	verdict: Verdict
+	approved_hash: str = ''
+	result: ScenarioResult | None = None
+
+
+def read_results(run_dir: Path) -> RunRecord | None:
+	f = run_dir / 'results.json'
+	if not f.is_file():
+		return None
+	return RunRecord.model_validate_json(f.read_text(encoding='utf-8'))
 
 
 def last_verdict(runs_dir: Path, scenario_id: str) -> str:
