@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 	sub.add_parser('init', help='create a QA workspace in the current directory')
 
+	plan = sub.add_parser('plan', help='draft test scenarios from app knowledge (no browser)')
+	plan.add_argument('ask', help='what to test, e.g. "the checkout flow"')
+	plan.add_argument('--area', default='', help='force all drafts under this scenario area')
+	plan.add_argument('--force', action='store_true', help='overwrite existing scenario files')
+
 	run = sub.add_parser('run', help='execute an approved scenario')
 	run.add_argument('id', nargs='?', default='', help='scenario id, e.g. checkout/coupon')
 	run.add_argument('--model', default=None, metavar='MODEL', help='executor model (alias or browser-use name)')
@@ -137,6 +142,12 @@ def main() -> None:
 		sys.exit(0)
 	if args.command == 'init':
 		sys.exit(cmd_init())
+	if args.command == 'plan':
+		from nkqa.planner import plan as plan_cmd
+
+		ws = require_workspace()
+		cfg = config_mod.load(ws.config_file)
+		sys.exit(asyncio.run(plan_cmd(ws, cfg, args.ask, args.area, args.force)))
 	if args.command == 'scenarios':
 		sys.exit(cmd_scenarios(require_workspace()))
 	if args.command == 'approve':

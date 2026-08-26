@@ -19,21 +19,26 @@ Put API keys in `.env` (e.g. `ANTHROPIC_API_KEY=...`).
 
 ```bash
 qa init                          # create a QA workspace in the current directory
-qa run https://your-app.com "checkout flow" --name checkout
-qa list                          # all recorded tests
-qa replay checkout               # rerun WITHOUT the LLM - free and repeatable
+qa plan "the checkout flow"      # planner drafts scenarios from app knowledge (no browser)
+qa scenarios                     # list scenarios: status + last verdict
+qa approve checkout/coupon       # review + approve (hash-bound: edits invalidate it)
+qa run checkout/coupon           # execute in a real browser -> per-step verdicts + results.md
+qa explore https://your-app.com "checkout flow"   # freeform AI-driven testing, no scenario
+qa list                          # all recorded runs
+qa replay <run-name>             # rerun WITHOUT the LLM - free and repeatable
 qa replay --all                  # whole suite (CI mode; exit 0 = all passed)
-qa replay checkout --var email=x@y.com
-qa run --model smart             # override the executor model for one run
 ```
+
+The gate: `qa run` refuses drafts, deprecated scenarios, and scenarios edited after
+approval (stale hash). A human approval is always in the loop before a browser moves.
 
 ## Workspace
 
 ```
 config.yaml     # app URL, model roles (planner/executor/reflector/fallback), aliases
 appmap/         # what the agent knows about your app (grows over time)
-scenarios/      # planned test scenarios (Phase 2: plan -> approve -> run)
-runs/<name>/    # evidence per test: history.json, videos/, last_run.gif, conversation/
+scenarios/      # one markdown file per scenario; approval bound to a content hash
+runs/<name>/    # evidence per run: results.md, history.json, videos/, gif, conversation/
 ```
 
 ## Development
