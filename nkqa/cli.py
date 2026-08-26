@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
 
 	sub.add_parser('list', help='list all recorded runs')
+	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
 	return parser
 
@@ -121,6 +122,27 @@ def cmd_approve(ws: Workspace, scenario_id: str) -> int:
 	scenarios_mod.approve(s, scenarios_mod.git_identity(ws.root))
 	print(f'✅ Approved (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
 	return 0
+
+
+def cmd_models() -> int:
+	from nkqa.models import ROLES, describe_role
+
+	ws = workspace_mod.find()
+	cfg = config_mod.load(ws.config_file if ws else None)
+	source = str(ws.config_file) if ws else 'built-in defaults (no workspace found)'
+	print(f'\nModel setup from: {source}\n')
+	print(f'{"ROLE":<11} {"MODEL":<36} {"PROVIDER":<20} KEYS')
+	ok = True
+	for role in ROLES:
+		name, provider, keys, missing = describe_role(cfg, role)
+		if missing:
+			ok = False
+			status = ' '.join(f'❌ {k}' for k in missing)
+		else:
+			status = '✅ ' + ', '.join(keys) if keys else '⚠️ unknown provider'
+		print(f'{role:<11} {name:<36} {provider:<20} {status}')
+	print('\nChange models in config.yaml (models/aliases); put keys in .env.')
+	return 0 if ok else 1
 
 
 def cmd_file_bug(ws: Workspace, run_name: str, step: int, project: str) -> int:
@@ -206,6 +228,8 @@ def main() -> None:
 		sys.exit(0)
 	if args.command == 'init':
 		sys.exit(cmd_init())
+	if args.command == 'models':
+		sys.exit(cmd_models())
 	if args.command == 'plan':
 		from nkqa.planner import plan as plan_cmd
 

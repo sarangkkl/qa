@@ -33,6 +33,10 @@ run:
   max_steps: 30
   headless: false
 
+appmap:
+  auto_reflect: true   # learn from every run (uses the 'reflector' model role)
+  crawl_pages: 15      # page budget for the optional `qa crawl`
+
 # MCP servers: extra tools for the product. Any server here can expose its tools to
 # the testing agent (expose_to_executor, default true) - except jira, which defaults
 # to false so bugs are only ever filed when a human runs `qa file-bug`.
@@ -71,6 +75,8 @@ class Config:
 	headless: bool = False
 	mcp_servers: list[MCPServer] = field(default_factory=list[MCPServer])
 	jira_project: str = ''
+	auto_reflect: bool = True
+	crawl_pages: int = 15
 
 	def mcp_server(self, name: str) -> MCPServer | None:
 		return next((s for s in self.mcp_servers if s.name == name), None)
@@ -112,4 +118,7 @@ def load(config_file: Path | None) -> Config:
 		)
 	jira_raw: dict[str, Any] = data.get('jira') or {}
 	cfg.jira_project = str(jira_raw.get('project') or '')
+	appmap_raw: dict[str, Any] = data.get('appmap') or {}
+	cfg.auto_reflect = bool(appmap_raw.get('auto_reflect', cfg.auto_reflect))
+	cfg.crawl_pages = int(appmap_raw.get('crawl_pages', cfg.crawl_pages))
 	return cfg
