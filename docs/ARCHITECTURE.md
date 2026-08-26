@@ -157,10 +157,15 @@ server), not custom integration code.
 
 ```yaml
 mcp:
-  jira:
-    server: atlassian          # bundled preset
-  test-data:
-    command: ["node", "./tools/seed-server.js"]   # customer's own tool server
+  jira:                        # official Atlassian remote MCP, bridged to stdio
+    command: npx
+    args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
+    # expose_to_executor defaults to false for jira: the testing agent
+    # must never file bugs on its own
+  test-data:                   # customer's own tool server
+    command: node
+    args: ['./tools/seed-server.js']
+    env: {SEED_KEY: 'env:SEED_KEY'}   # env: indirection - no secrets in config
 ```
 
 **Jira scope in v1 (deliberately narrow):**
