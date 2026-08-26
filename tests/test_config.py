@@ -7,7 +7,7 @@ def test_defaults_when_missing(tmp_path: Path) -> None:
 	cfg = config.load(tmp_path / 'nope.yaml')
 	assert cfg.max_steps == 30
 	assert cfg.headless is False
-	assert cfg.models['executor'] == 'default'
+	assert cfg.models['executor'] == 'fast'
 	assert cfg.aliases['fast'] == 'anthropic_claude_haiku_4_5'
 
 
@@ -31,8 +31,10 @@ def test_template_parses_to_defaults(tmp_path: Path) -> None:
 
 def test_model_name_resolution() -> None:
 	cfg = config.Config()
-	assert models.model_name(cfg, 'executor') is None  # 'default' -> browser-use decides
+	assert models.model_name(cfg, 'executor') == 'anthropic_claude_haiku_4_5'
 	assert models.model_name(cfg, 'fallback') == 'anthropic_claude_haiku_4_5'
+	cfg.models['executor'] = 'default'  # explicit opt-in to browser-use's own default
+	assert models.model_name(cfg, 'executor') is None
 	assert models.model_name(cfg, 'executor', override='smart') == 'anthropic_claude_sonnet_5'
 	assert models.model_name(cfg, 'executor', override='openai_gpt_4_1') == 'openai_gpt_4_1'  # raw name passes through
 	assert models.model_name(cfg, 'executor', override='default') is None

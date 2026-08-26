@@ -10,8 +10,10 @@ from browser_use import Agent
 from browser_use.browser import BrowserProfile
 from pydantic import BaseModel
 
+from nkqa import config as config_mod
 from nkqa.execution.evidence import list_runs, recorded_runs
 from nkqa.hitl import HumanInTheLoop
+from nkqa.models import resolve_llm
 from nkqa.workspace import Workspace, slugify
 
 
@@ -31,6 +33,7 @@ def resolve_history_file(ws: Workspace, name_or_path: str) -> Path | None:
 		list_runs(ws.runs_dir)
 		return None
 	candidates = [
+		ws.runs_dir / name_or_path / 'history.json',  # exact run-dir name (timestamped scenario runs)
 		ws.runs_dir / slugify(name_or_path) / 'history.json',
 		Path(name_or_path) / 'history.json',
 		Path(name_or_path),
@@ -57,8 +60,17 @@ async def replay(ws: Workspace, hitl: HumanInTheLoop, history_file: Path, var_pa
 	await _collect_replay_secrets(hitl, history_file)
 	print(f'\n▶️  Replaying {run_dir.name}' + (f' with overrides {list(variables)}' if variables else ''))
 
+	from nkqa.execution.report import ScenarioResult
+
+	config = config_mod.load(ws.config_file)
+	# scenario runs (marked by results.md) recorded a structured done action -
+	# the replay agent needs the same schema to parse the recording back
+	schema = ScenarioResult if (run_dir / 'results.md').is_file() else None
 	agent: Agent[None, BaseModel] = Agent(
 		task=f'Replay of recorded QA test "{run_dir.name}"',
+		# replay never calls the LLM, but Agent() demands one at construction
+		llm=resolve_llm(config, 'fallback') or resolve_llm(config, 'executor'),
+		output_model_schema=schema,
 		tools=hitl.build_tools(),
 		sensitive_data=hitl.secrets,
 		browser_profile=BrowserProfile(headless=False, record_video_dir=run_dir / 'videos'),

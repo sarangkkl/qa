@@ -6,8 +6,9 @@ from typing import Any
 
 import yaml
 
-# 'default' means: let browser-use pick its own default model (what the prototype did).
-DEFAULT_MODELS = {'planner': 'smart', 'executor': 'default', 'reflector': 'fast', 'fallback': 'fast'}
+# 'default' lets browser-use pick its own model - but that needs a BROWSER_USE_API_KEY,
+# so out of the box every role resolves via ANTHROPIC_API_KEY (the documented requirement).
+DEFAULT_MODELS = {'planner': 'smart', 'executor': 'fast', 'reflector': 'fast', 'fallback': 'fast'}
 DEFAULT_ALIASES = {'smart': 'anthropic_claude_sonnet_5', 'fast': 'anthropic_claude_haiku_4_5'}
 
 CONFIG_TEMPLATE = """\
@@ -16,10 +17,11 @@ app:
   base_url: https://example.com
 
 # Model roles. Values are aliases (defined below) or raw browser-use model names
-# like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model.
+# like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model
+# (requires BROWSER_USE_API_KEY).
 models:
   planner: smart
-  executor: default
+  executor: fast
   reflector: fast
   fallback: fast
 
