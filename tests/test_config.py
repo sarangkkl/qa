@@ -38,3 +38,20 @@ def test_model_name_resolution() -> None:
 	assert models.model_name(cfg, 'executor', override='smart') == 'anthropic_claude_sonnet_5'
 	assert models.model_name(cfg, 'executor', override='openai_gpt_4_1') == 'openai_gpt_4_1'  # raw name passes through
 	assert models.model_name(cfg, 'executor', override='default') is None
+
+
+def test_exact_model_ids_pass_through() -> None:
+	cfg = config.Config()
+	cfg.aliases['smart'] = 'openai:gpt-5.1-mini'
+	assert models.model_name(cfg, 'planner') == 'openai:gpt-5.1-mini'  # dots survive
+	assert models.describe_role(cfg, 'planner')[1] == 'openai'
+	assert models.describe_role(cfg, 'planner')[2] == ['OPENAI_API_KEY']
+
+
+def test_build_exact_rejects_bad_names() -> None:
+	import pytest
+
+	with pytest.raises(ValueError, match='missing an id'):
+		models.build_exact('openai:')
+	with pytest.raises(ValueError, match='Unknown provider'):
+		models.build_exact('llamafile:foo')

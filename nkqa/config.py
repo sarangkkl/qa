@@ -16,9 +16,10 @@ app:
   name: My App
   base_url: https://example.com
 
-# Model roles. Values are aliases (defined below) or raw browser-use model names
-# like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model
-# (requires BROWSER_USE_API_KEY).
+# Model roles. Values are aliases (defined below) or model names in either form:
+#   anthropic_claude_haiku_4_5   browser-use naming (underscores become dashes)
+#   openai:gpt-5.1-mini          provider:exact-id, passed through verbatim
+# 'default' lets browser-use pick its own model (requires BROWSER_USE_API_KEY).
 models:
   planner: smart      # drafting scenarios, revising, ingesting docs
   executor: fast      # driving the browser through approved steps
@@ -29,6 +30,8 @@ models:
 aliases:
   smart: anthropic_claude_sonnet_5
   fast: anthropic_claude_haiku_4_5
+  # mixing providers is fine, e.g.:
+  # smart: openai:gpt-5.1
 
 run:
   max_steps: 30
