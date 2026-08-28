@@ -18,6 +18,7 @@ Put API keys in `.env` (e.g. `ANTHROPIC_API_KEY=...`).
 ## Quickstart
 
 ```bash
+qa                               # interactive session (the main way to use it)
 qa init                          # create a QA workspace in the current directory
 qa learn appdoc.md               # build the appmap from an annotated doc (screenshots + text)
 qa plan "the checkout flow"      # planner drafts scenarios from app knowledge (no browser)
@@ -32,8 +33,23 @@ qa replay --all                  # whole suite (CI mode; exit 0 = all passed)
 qa file-bug <run> [--step N]     # file a Jira bug from a failed run - always human-confirmed
 qa reflect <run>                 # update the appmap from a past run (automatic after runs)
 qa crawl                         # optional: explore the live app read-only to enrich the map
+qa revise <id> "<how>"           # rewrite a scenario (invalidates its approval)
 qa models                        # roles -> models -> providers -> are the API keys set?
 ```
+
+### The interactive session
+
+`qa` with no arguments opens a Claude-Code-style session: it greets you with the state
+of your QA world (appmap size, scenarios by status, recent runs, active models), then
+takes either slash commands (`/plan`, `/run`, `/scenarios`, `/revise`, `/help` - instant,
+no LLM cost) or plain English ("which scenarios are still drafts?", "make step 3
+stricter"). Credentials and permission prompts appear inline; a credential typed once is
+reused for the session, never written to disk, and `/forget` clears it. Ctrl+C cancels
+whatever is running and returns to the prompt; Ctrl+D or `/exit` leaves.
+
+**The chat agent cannot approve scenarios.** Ask it to and it hands the keystroke back to
+you (`/approve <id>`) - approval is the gate everything else rests on, so it is enforced
+structurally, not by asking the model nicely.
 
 The appmap (`appmap/`) is the product's memory: plain markdown in git, no vector DB.
 It's seeded by `qa learn` from a document you write - screenshots with a line or two
