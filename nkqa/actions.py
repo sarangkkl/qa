@@ -5,6 +5,10 @@ so the CLI can exit with it and the shell can report it.
 """
 
 import asyncio
+import contextlib
+import os
+import re
+import shutil
 from collections.abc import Coroutine
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +18,7 @@ from nkqa import config as config_mod
 from nkqa import scenarios as scenarios_mod
 from nkqa import workspace as workspace_mod
 from nkqa.config import Config
+from nkqa.config import MCPServer as MCPServerSpec
 from nkqa.hitl import HumanInTheLoop
 from nkqa.workspace import Workspace
 
@@ -101,6 +106,92 @@ def models() -> int:
 			status = '✅ ' + ', '.join(keys) if keys else '⚠️ unknown provider'
 		print(f'{role:<11} {name:<36} {provider:<20} {status}')
 	print('\nChange models in config.yaml (models/aliases); put keys in .env.')
+	return 0 if ok else 1
+
+
+AUTH_READY = re.compile(r'connected to remote server|proxy established|already authorized', re.I)
+AUTH_CACHE = Path.home() / '.mcp-auth'
+
+
+async def _sign_in(spec: MCPServerSpec, timeout: float) -> bool:
+	"""Run the server command directly so its sign-in URL and prompts reach the user.
+
+	Needed because the MCP client's own connect() gives up after 10s - far less than a
+	human needs to complete an OAuth login in a browser.
+	"""
+	from nkqa.mcp import resolve_env
+
+	env = {**os.environ, **resolve_env(spec.env)}
+	process = await asyncio.create_subprocess_exec(
+		spec.command, *spec.args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env
+	)
+	ready = False
+	try:
+		assert process.stdout is not None
+		while True:
+			line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout)
+			if not line:
+				break
+			text = line.decode(errors='replace').rstrip()
+			print(f'   {text}')
+			if AUTH_READY.search(text):
+				ready = True
+				break
+	except TimeoutError:
+		print(f'   ⏱️  Gave up after {int(timeout)}s without a completed sign-in.')
+	finally:
+		process.terminate()
+		with contextlib.suppress(Exception):
+			await asyncio.wait_for(process.wait(), timeout=5)
+	return ready
+
+
+async def auth(ws: Workspace, server: str = '', reset: bool = False, config: Config | None = None) -> int:
+	"""Sign in to configured MCP servers and verify their tools are reachable."""
+	from nkqa.mcp import MCPRuntime
+
+	cfg = _cfg(ws, config)
+	if not cfg.mcp_servers:
+		print('No MCP servers in config.yaml. Add one under `mcp:` (the file has a commented example).')
+		return 2
+	targets = [s for s in cfg.mcp_servers if not server or s.name == server]
+	if not targets:
+		known = ', '.join(s.name for s in cfg.mcp_servers)
+		print(f'No MCP server "{server}" in config.yaml. Configured: {known}')
+		return 2
+
+	if reset:
+		if not AUTH_CACHE.is_dir():
+			print(f'No cached logins at {AUTH_CACHE}.')
+		elif input(f'Delete cached MCP logins in {AUTH_CACHE}? [y/N]: ').strip().lower() != 'y':
+			print('Kept.')
+			return 1
+		else:
+			shutil.rmtree(AUTH_CACHE)
+			print('🧹 Cleared cached logins - you will be asked to sign in again.')
+
+	ok = True
+	for spec in targets:
+		print(f'\n🔌 {spec.name}: {spec.command} {" ".join(spec.args)}')
+		try:
+			async with MCPRuntime([spec]) as rt:  # already signed in? this is instant
+				tools = rt.tool_names(spec.name)
+			print(f'   ✅ connected · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
+			continue
+		except Exception:
+			print('   Sign-in needed. A browser window will open - approve access there.')
+
+		if not await _sign_in(spec, timeout=300):
+			print(f'   ❌ {spec.name}: not authorized. Re-run:  qa auth {spec.name}')
+			ok = False
+			continue
+		try:
+			async with MCPRuntime([spec]) as rt:
+				tools = rt.tool_names(spec.name)
+			print(f'   ✅ signed in · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
+		except Exception as e:
+			ok = False
+			print(f'   ❌ {spec.name}: signed in but the connection failed: {e}')
 	return 0 if ok else 1
 
 

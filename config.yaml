@@ -27,10 +27,10 @@ appmap:
 # the testing agent (expose_to_executor, default true) - except jira, which defaults
 # to false so bugs are only ever filed when a human runs `qa file-bug`.
 # Secret env values use 'env:NAME' to read NAME from the environment/.env at launch.
-# mcp:
-#   jira:
-#     command: npx
-#     args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
+mcp:
+  jira:
+    command: npx
+    args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
 #   test-data:
 #     command: node
 #     args: ['./tools/seed-server.js']

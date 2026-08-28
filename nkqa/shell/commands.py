@@ -133,6 +133,10 @@ async def _file_bug(ctx: ShellContext, a: dict[str, Any]) -> int:
 	)
 
 
+async def _auth(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.auth(ctx.ws, str(a.get('server', '')), bool(a.get('reset')), ctx.config)
+
+
 async def _models(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return actions.models()
 
@@ -237,6 +241,15 @@ COMMANDS = [
 			Param('run', 'run dir name', required=True),
 			Param('step', 'which failed step to file', type='integer', flag=True),
 			Param('project', 'Jira project key', flag=True),
+		],
+	),
+	Command(
+		'auth',
+		'sign in to configured MCP servers (Jira) and verify them',
+		_auth,
+		[
+			Param('server', 'server name from config.yaml'),
+			Param('reset', 'clear cached logins first', type='boolean', flag=True),
 		],
 	),
 	Command('models', 'show model roles, providers, and API key status', _models),

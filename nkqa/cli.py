@@ -62,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
 	replay.add_argument('--all', action='store_true', help='replay every recorded run (CI mode)')
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
 
+	auth = sub.add_parser('auth', help='sign in to configured MCP servers (Jira) and verify them')
+	auth.add_argument('server', nargs='?', default='', help='server name from config.yaml mcp: (default: all)')
+	auth.add_argument('--reset', action='store_true', help='clear cached logins and sign in again')
+
 	sub.add_parser('list', help='list all recorded runs')
 	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
@@ -102,6 +106,8 @@ def main() -> None:
 		sys.exit(actions.approve(ws, args.id))
 	if command == 'list':
 		sys.exit(actions.list_runs(ws))
+	if command == 'auth':
+		sys.exit(actions.run_sync(actions.auth(ws, args.server, args.reset)))
 	if command == 'plan':
 		sys.exit(actions.run_sync(actions.plan(ws, args.ask, args.ticket, args.area, args.force)))
 	if command == 'revise':

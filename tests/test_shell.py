@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from nkqa import workspace
+from nkqa import actions, workspace
 from nkqa.config import Config
 from nkqa.hitl import HumanInTheLoop
 from nkqa.shell import agent, render, session
@@ -142,3 +142,13 @@ def test_registry_covers_the_cli_surface() -> None:
 	shell_only = {'help', 'exit', 'forget'}
 	cli_only = {'init', 'version', 'chat'}
 	assert set(REGISTRY) - shell_only == cli_commands - cli_only
+
+
+def test_auth_guards(tmp_path: Path) -> None:
+	ctx = make_ctx(tmp_path)
+	assert asyncio.run(actions.auth(ctx.ws, config=ctx.config)) == 2  # nothing configured
+
+	from nkqa.config import MCPServer
+
+	ctx.config.mcp_servers = [MCPServer(name='jira', command='npx')]
+	assert asyncio.run(actions.auth(ctx.ws, 'nope', config=ctx.config)) == 2  # unknown server
