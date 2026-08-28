@@ -8,7 +8,7 @@ import yaml
 
 # 'default' lets browser-use pick its own model - but that needs a BROWSER_USE_API_KEY,
 # so out of the box every role resolves via ANTHROPIC_API_KEY (the documented requirement).
-DEFAULT_MODELS = {'planner': 'smart', 'executor': 'fast', 'reflector': 'fast', 'fallback': 'fast'}
+DEFAULT_MODELS = {'planner': 'smart', 'executor': 'fast', 'reflector': 'fast', 'chat': 'fast', 'fallback': 'fast'}
 DEFAULT_ALIASES = {'smart': 'anthropic_claude_sonnet_5', 'fast': 'anthropic_claude_haiku_4_5'}
 
 CONFIG_TEMPLATE = """\
@@ -20,10 +20,11 @@ app:
 # like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model
 # (requires BROWSER_USE_API_KEY).
 models:
-  planner: smart
-  executor: fast
-  reflector: fast
-  fallback: fast
+  planner: smart      # drafting scenarios, revising, ingesting docs
+  executor: fast      # driving the browser through approved steps
+  reflector: fast     # learning from runs into the appmap
+  chat: fast          # routing/narration in the interactive shell
+  fallback: fast      # cross-provider failover mid-run
 
 aliases:
   smart: anthropic_claude_sonnet_5

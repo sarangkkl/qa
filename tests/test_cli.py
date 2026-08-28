@@ -17,7 +17,8 @@ def test_version_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 	assert run_cli(monkeypatch, ['version']) == 0
 
 
-def test_no_command_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_command_outside_workspace_exits_two(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+	monkeypatch.chdir(tmp_path)  # bare `qa` opens the shell, which needs a workspace
 	assert run_cli(monkeypatch, []) == 2
 
 

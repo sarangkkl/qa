@@ -8,7 +8,7 @@ from browser_use.llm.models import get_llm_by_name
 
 from nkqa.config import Config
 
-ROLES = ('planner', 'executor', 'reflector', 'fallback')
+ROLES = ('planner', 'executor', 'reflector', 'chat', 'fallback')
 
 
 def model_name(config: Config, role: str, override: str | None = None) -> str | None:

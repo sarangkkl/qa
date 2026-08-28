@@ -1,0 +1,40 @@
+app:
+  name: My App
+  base_url: https://example.com
+
+# Model roles. Values are aliases (defined below) or raw browser-use model names
+# like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model
+# (requires BROWSER_USE_API_KEY).
+models:
+  planner: smart
+  executor: fast
+  reflector: fast
+  fallback: fast
+
+aliases:
+  smart: anthropic_claude_sonnet_5
+  fast: anthropic_claude_haiku_4_5
+
+run:
+  max_steps: 30
+  headless: false
+
+appmap:
+  auto_reflect: true   # learn from every run (uses the 'reflector' model role)
+  crawl_pages: 15      # page budget for the optional `qa crawl`
+
+# MCP servers: extra tools for the product. Any server here can expose its tools to
+# the testing agent (expose_to_executor, default true) - except jira, which defaults
+# to false so bugs are only ever filed when a human runs `qa file-bug`.
+# Secret env values use 'env:NAME' to read NAME from the environment/.env at launch.
+# mcp:
+#   jira:
+#     command: npx
+#     args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
+#   test-data:
+#     command: node
+#     args: ['./tools/seed-server.js']
+#     env:
+#       SEED_KEY: env:SEED_KEY
+# jira:
+#   project: PROJ   # default project key for `qa file-bug`
