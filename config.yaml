@@ -1,6 +1,6 @@
 app:
-  name: My App
-  base_url: https://example.com
+  name: Sustain (SLR Consulting)
+  base_url: https://dev.sustain.slrconsulting.com
 
 # Model roles. Values are aliases (defined below) or raw browser-use model names
 # like anthropic_claude_haiku_4_5. 'default' lets browser-use pick its default model
@@ -12,7 +12,7 @@ models:
   fallback: fast
 
 aliases:
-  smart: anthropic_claude_sonnet_5
+  smart: openai:gpt-5.6-luna
   fast: anthropic_claude_haiku_4_5
 
 run:
