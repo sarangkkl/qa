@@ -177,15 +177,23 @@ mcp:
 
 ## 8. CLI surface (v1)
 
+Shipped (Phases 1–4), plus the shell that fronts them (Phase 5):
+
 ```
-qa init [--crawl]          # create workspace; optionally onboard via autonomous crawl
-qa plan "<ask>" | --ticket PROJ-123     # draft scenarios (status: draft)
-qa approve <scenario>      # flip to approved (or merge the PR)
-qa run <scenario|--tag t|--all>         # execute approved scenarios, record evidence
-qa replay <scenario>       # deterministic re-run from history, no LLM (from prototype)
-qa list                    # scenarios + last verdicts
-qa file-bug <finding-id>   # push a finding to Jira with evidence
-qa config / /model         # settings, model switching
+qa                         # interactive session: slash commands + natural language
+qa init                    # create the workspace (migrates old prototype recordings)
+qa learn <doc.md|folder>   # build the appmap from an annotated doc (text + screenshots)
+qa plan "<ask>" [--ticket PROJ-123]     # draft scenarios (status: draft)
+qa scenarios               # ids, status (draft/approved/STALE), last verdict
+qa approve <id>            # hash-bound approval; human keystroke, never the agent
+qa revise <id> "<how>"     # rewrite a scenario (invalidates its approval)
+qa run <id>                # execute an approved scenario -> per-step verdicts + evidence
+qa explore [url] [focus]   # freeform AI-driven testing, no scenario
+qa replay <run> [--all]    # deterministic re-run from history, no LLM
+qa reflect <run>           # appmap learns from a run (automatic after every run)
+qa crawl [--pages N]       # optional read-only exploration to enrich the appmap
+qa list / qa models        # recorded runs · model roles, providers, key presence
+qa file-bug <run> [--step N]            # push a finding to Jira with repro + evidence
 ```
 
 ## 9. Build phases
@@ -199,8 +207,11 @@ qa config / /model         # settings, model switching
    `qa file-bug`.
 4. **App map** — cheapest sources first: manual + learn-from-runs, then
    `qa init --crawl`, docs ingestion last. *The compounding moat.*
-5. **Suite & CI polish** — tag suites, `run --all` regression mode on the replay
-   machinery, run-over-run comparison, stuck-escalation.
+5. **Interactive shell** — `qa` with no arguments opens a Claude-Code-style session:
+   slash commands + natural language over the commands above. *The product's face.*
+   The chat agent can never approve — that stays a human keystroke.
+6. **Suite & CI polish** — tag suites, `run --all` regression mode on the replay
+   machinery, run-over-run comparison, stuck-escalation, selector auto-healing.
 
 ## 10. Non-goals for v1
 
