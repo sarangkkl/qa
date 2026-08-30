@@ -5,14 +5,19 @@ staged through proposal, risk approval and document review, submitted to the cli
 then won/lost. Clients, project teams, commercials and documents hang off each project.
 
 - **Base URL (dev):** https://dev.sustain.slrconsulting.com
-- **Login:** `/login`, corporate sign-in with 2FA. Sessions persist in the browser
-  profile, so an authenticated profile lands straight on `/projects`.
+- **Login:** go to **`/login`** and sign in with an email — on **dev this skips 2FA**, so
+  automated runs can authenticate unattended. Hitting the root URL instead sends you down
+  the corporate 2FA path, so tests should always start at `/login`.
+- Sessions persist in the browser profile: an already-authenticated profile lands straight
+  on `/projects`.
 - **Mapped:** 2026-08-28, by read-only navigation of the dev environment as Gaurav Sah.
 
 ## Roles & accounts
 
+- **QA test account (use this for automated runs):** `test.account.dev.001@slrconsulting.com`
 - Signed-in user during mapping: **Gaurav Sah (GS)** - can create opportunities, edit
-  project fields, and is Proposal Manager on many projects.
+  project fields, and is Proposal Manager on many projects. Prefer the QA account for runs
+  so evidence and notifications are not attributed to a real person.
 - Other proposal managers visible in data: Ajay Kumar, Jaymin Patel, testaccount dev001.
 - Approval/review permissions exist (Approve Risks, Reviews with "Manage delegations"),
   but which role grants them is **not yet known**.

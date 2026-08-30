@@ -71,18 +71,25 @@ That decides where scenarios get written first.
 
 ## 2. Access
 
-### 🔴 2.1 Can we get a dedicated QA account?
+### ✅ 2.1 Can we get a dedicated QA account? — ANSWERED
+`test.account.dev.001@slrconsulting.com` is the QA account. Recorded in the appmap.
+
+<details><summary>original question</summary>
 Mapping ran as **Gaurav Sah**. Runs attribute actions to the signed-in user, so agent-created
 projects would show you as Proposal Manager, and test runs would pollute your notifications
 and delegations. A dedicated account (ideally with the same permissions) keeps evidence clean.
 
-**Answer:**
+</details>
 
-### 🟡 2.2 Why did 2FA not trigger?
+### ✅ 2.2 Why did 2FA not trigger? — PARTLY ANSWERED
+Going to **`/login`** and signing in with an email skips 2FA on dev, which is what makes
+unattended runs possible. Still worth confirming this shortcut cannot reach production.
+
+<details><summary>original question</summary>
 A brand-new Chrome profile went straight to `/projects` fully authenticated — no login, no
 2FA. Expected SSO behaviour on dev, or a session-handling gap worth investigating?
 
-**Answer:**
+</details>
 
 ### 🟡 2.3 Jira details
 To finish Phase 3: complete the `qa auth jira` OAuth login, then provide
