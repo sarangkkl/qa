@@ -5,7 +5,7 @@
 Approval queues for project risk and MSA review.
 
 ## Key elements
-- **Manage delegations** button (delegate approvals to another user - not yet explored)
+- **Manage delegations** button → `/delegations` (see pages/delegations.md)
 - Tabs: **Risk Approval**, **MSA Review**
 - Status filter: **Pending**
 - Empty state: "No Risk Approvals To Approve"

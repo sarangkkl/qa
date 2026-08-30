@@ -26,9 +26,10 @@ then won/lost. Clients, project teams, commercials and documents hang off each p
 | Reviews | `/reviews` | technical and proposal-director document reviews |
 | Clients | `/clients` | client records and client discovery |
 | PM Hub | `/pm-hub` | delivery view: contract value, invoiced, WIP, budget remaining |
-| Sustain Bot | (in-app) | AI assistant, opened from the nav - behaviour not yet mapped |
-| Notifications | (in-app) | notification panel - not yet mapped |
-| Halo Support | (in-app) | support entry point - not yet mapped |
+| Notifications | panel + `/notifications` | unread/read notification feed |
+| Delegations | `/delegations` | approver responsibility management (from Approve Risks) |
+| Sustain Bot | (in-app) | AI assistant - **out of testing scope** |
+| Halo Support | (in-app) | support entry point - **out of testing scope** |
 
 ## Project lifecycle (stage bar on every project)
 
@@ -54,8 +55,17 @@ Statuses seen alongside stages: `InProgress`, `ProposalInReview`, `Won`, `Active
 - PM Hub renders "Loading projects…" before data arrives; assert after load, not on paint.
 - The projects list is large (442 results in dev) and paginates 10 per page.
 
+## Irreversible actions (must be permission-gated in tests)
+
+- **Contracts → Create Contract from Project**: contracts cannot be deleted once added, and
+  the Work Breakdown Structure is submitted to **VantagePoint** and locked from modification.
+- Any stage transition, and any Save on a project tab, writes real data in dev.
+
 ## Not yet mapped
 
-Sustain Bot, Notifications, Halo Support, the GS profile menu, client detail pages,
-Create Client, MSA Review, stage transitions, and everything requiring a form submission
-(mapping was strictly read-only).
+The GS profile menu; whether clients have a detail page (rows are not links); the
+**Client Discovery** tab; delegation mechanics; stage transitions; and everything behind a
+form submission - mapping was strictly read-only. `/settings` and `/profile` do not exist
+(both fall back to the projects list).
+
+**Out of scope for testing (per the team):** Sustain Bot and Halo Support.

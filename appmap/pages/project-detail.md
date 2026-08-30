@@ -23,6 +23,8 @@ Notes), Client Details (Client + Edit Client, client address), Project Details,
 Project Team, Fee Information, Submission Details.
 (* editable via a pencil icon; Business Unit and Practice render read-only/derived.)
 
+Each tab is documented in **pages/project-tabs.md**.
+
 ## Document Hub (`/document-hub`)
 Tabs All / General Documents / Win-Info Documents; **Add document**; table of
 Name, Description, Category, Type, Last Modified, Actions. Empty state: "No documents found."
