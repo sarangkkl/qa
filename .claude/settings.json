@@ -21,7 +21,8 @@
       "Bash(venv/bin/pip list *)",
       "Bash(venv/bin/python -c \"import browser_use.browser.video_recorder as vr; print\\([n for n in dir\\(vr\\) if 'ecord' in n]\\)\")",
       "Bash(venv/bin/python -c ' *)",
-      "Bash(npx --version)"
+      "Bash(npx --version)",
+      "Bash(cat)"
     ]
   }
 }
