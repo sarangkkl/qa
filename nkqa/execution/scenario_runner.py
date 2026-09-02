@@ -15,6 +15,7 @@ from pathlib import Path
 from browser_use import Agent, Tools
 from browser_use.browser import BrowserProfile
 
+from nkqa import appmap
 from nkqa.config import Config
 from nkqa.execution.report import ScenarioResult, write_results
 from nkqa.hitl import HumanInTheLoop
@@ -31,11 +32,18 @@ REFUSALS = {
 }
 
 
-def build_task(scenario: Scenario, base_url: str) -> str:
+def build_task(scenario: Scenario, base_url: str, app_context: str = '') -> str:
 	lines = [
 		f'Execute this approved QA test scenario against {base_url or "the application"}.',
 		f'Scenario: {scenario.title}',
 	]
+	if app_context:
+		lines += [
+			'',
+			'WHAT YOU ALREADY KNOW ABOUT THIS APP (reference, not steps to execute - but do',
+			'follow the documented sign-in procedure if you are not already signed in):',
+			app_context,
+		]
 	if scenario.preconditions:
 		lines += ['', 'Preconditions (verify or establish these first):']
 		lines += [f'- {p}' for p in scenario.preconditions]
@@ -89,7 +97,7 @@ async def _execute(
 	model_override: str | None,
 ) -> int:
 	agent: Agent[None, ScenarioResult] = Agent(
-		task=build_task(scenario, config.base_url),
+		task=build_task(scenario, config.base_url, appmap.context_for_run(ws)),
 		llm=resolve_llm(config, 'executor', model_override),
 		tools=tools,
 		extend_system_message=QA_RULES,

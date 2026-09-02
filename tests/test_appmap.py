@@ -58,3 +58,24 @@ def test_describe_role(monkeypatch: pytest.MonkeyPatch) -> None:
 
 	cfg.models['executor'] = 'default'
 	assert models.describe_role(cfg, 'executor')[1] == 'browser-use default'
+
+
+def test_context_for_run_selects_overview_and_login(tmp_path: Path) -> None:
+	ws = workspace.create(tmp_path)
+	(ws.appmap_dir / 'flows').mkdir(parents=True, exist_ok=True)
+	(ws.appmap_dir / 'overview.md').write_text('the app does things')
+	(ws.appmap_dir / 'flows' / 'login.md').write_text('go to /login')
+	(ws.appmap_dir / 'pages').mkdir(parents=True, exist_ok=True)
+	(ws.appmap_dir / 'pages' / 'huge.md').write_text('x' * 5000)
+
+	context = appmap.context_for_run(ws)
+	assert 'the app does things' in context
+	assert 'go to /login' in context
+	assert 'x' * 5000 not in context  # page docs stay out of every run's prompt
+	assert 'appmap/overview.md' in context  # provenance is visible to the model
+
+
+def test_context_for_run_empty_without_appmap(tmp_path: Path) -> None:
+	ws = workspace.create(tmp_path)
+	(ws.appmap_dir / 'overview.md').unlink()
+	assert appmap.context_for_run(ws) == ''  # nothing known yet: no context block at all

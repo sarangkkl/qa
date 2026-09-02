@@ -60,6 +60,14 @@ def test_build_task_contains_everything(tmp_path: Path) -> None:
 	assert '1. Log in. EXPECT: dashboard visible' in task
 	assert 'OUT OF SCOPE' in task and 'real payments' in task
 	assert 'blocked, not failed' in task
+	assert 'ALREADY KNOW' not in task  # no appmap, no context block
+
+
+def test_build_task_carries_app_knowledge(tmp_path: Path) -> None:
+	s = make_scenario(tmp_path)
+	task = build_task(s, 'https://shop.test', '--- appmap/flows/login.md ---\nsign in at /login')
+	assert 'sign in at /login' in task
+	assert 'reference, not steps to execute' in task
 
 
 def test_run_scenario_refuses_unapproved(tmp_path: Path) -> None:

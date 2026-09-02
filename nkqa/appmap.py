@@ -36,6 +36,22 @@ def read_all(ws: Workspace) -> dict[str, str]:
 	}
 
 
+RUN_CONTEXT_FILES = ('overview.md', 'flows/login.md')
+
+
+def context_for_run(ws: Workspace) -> str:
+	"""What the executor should know before it touches the app: the overview, plus the
+	login flow when one is documented. Deliberately not the whole appmap - the page docs
+	are large and mostly irrelevant to any single scenario.
+	"""
+	parts: list[str] = []
+	for name in RUN_CONTEXT_FILES:
+		f = ws.appmap_dir / name
+		if f.is_file():
+			parts.append(f'--- appmap/{name} ---\n{f.read_text(encoding="utf-8").strip()}')
+	return '\n\n'.join(parts)
+
+
 def _safe_target(ws: Workspace, rel: str) -> Path:
 	p = Path(rel)
 	if p.is_absolute() or '..' in p.parts or p.suffix not in ALLOWED_SUFFIXES:

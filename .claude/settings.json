@@ -22,7 +22,11 @@
       "Bash(venv/bin/python -c \"import browser_use.browser.video_recorder as vr; print\\([n for n in dir\\(vr\\) if 'ecord' in n]\\)\")",
       "Bash(venv/bin/python -c ' *)",
       "Bash(npx --version)",
-      "Bash(cat)"
+      "Bash(cat)",
+      "Bash(grep -n \"def build_task\\\\|task=\\\\|preconditions\\\\|Precondition\" nkqa/execution/scenario_runner.py | head -20; echo \"=== task builder ===\"; sed -n '/def build_task/,/^def /p' nkqa/execution/scenario_runner.py | head -40)"
+    ],
+    "additionalDirectories": [
+      "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution"
     ]
   }
 }
