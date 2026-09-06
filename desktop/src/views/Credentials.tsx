@@ -44,6 +44,8 @@ export function Credentials({
 				<p className="empty">Press Refresh to read the vault.</p>
 			)}
 
+			<Connectors connectors={connectors} session={session} jobs={jobs} busy={busy} />
+
 			<ModelPicker
 				session={session}
 				jobs={jobs}
@@ -82,7 +84,6 @@ export function Credentials({
 				<code>qa vault set &lt;name&gt;</code> in a terminal.
 			</p>
 
-			<Connectors connectors={connectors} session={session} jobs={jobs} busy={busy} />
 		</div>
 	)
 }

@@ -18,6 +18,7 @@ from browser_use.browser import BrowserProfile
 from nkqa import appmap
 from nkqa.appmap import AppmapUpdate, FileUpdate
 from nkqa.config import Config
+from nkqa.execution import screencast, stream
 from nkqa.hitl import HumanInTheLoop
 from nkqa.models import resolve_llm
 from nkqa.prompts import QA_RULES
@@ -180,14 +181,24 @@ async def crawl(
 	)
 	stop.attach(agent)
 
+	steps = 0
+
 	async def checkpoint(active_agent: Agent[None, AppmapUpdate]) -> None:
+		nonlocal steps
+		steps += 1
 		with contextlib.suppress(Exception):
 			active_agent.save_history(run_dir / 'history.json')
+		with contextlib.suppress(Exception):
+			await ch.emit(stream.step_event(active_agent, steps, run_dir))
 
 	update: AppmapUpdate | None = None
 	cancelled = False
 	try:
-		history = await agent.run(max_steps=max(config.max_steps, pages * 4), on_step_end=checkpoint)
+		# The line every other runner already had. Without it the longest job in the product -
+		# a crawl runs for tens of minutes - narrated nothing and showed no live view, so there
+		# was no way to tell a working crawl from a stuck one.
+		async with stream.forward(ch, hitl.secrets), screencast.stream(agent, ch):
+			history = await agent.run(max_steps=max(config.max_steps, pages * 4), on_step_end=checkpoint)
 		update = history.structured_output
 	except (KeyboardInterrupt, asyncio.CancelledError):
 		cancelled = True

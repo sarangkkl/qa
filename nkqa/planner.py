@@ -102,13 +102,13 @@ async def plan(
 
 	ticket_section = ''
 	if ticket:
-		from nkqa.jira import fetch_issue, jira_server
-		from nkqa.mcp import MCPRuntime
+		from nkqa.jira import read_issue
 
-		spec = jira_server(config)
-		await ch.log(f'🎫 Fetching {ticket} via MCP server "{spec.name}"...')
-		async with MCPRuntime([spec]) as rt:
-			ticket_section = f'\n\n### Ticket {ticket}\n{await fetch_issue(rt, spec, ticket)}'
+		body, error = await read_issue(config, ch, ticket)
+		if error:
+			await ch.log(error)
+			return 2
+		ticket_section = f'\n\n### Ticket {ticket}\n{body}'
 		ask = ask or f"verify that ticket {ticket}'s acceptance criteria are met"
 
 	prompt = gather_context(ws, config) + ticket_section + f'\n\n### Ask\n{ask}'

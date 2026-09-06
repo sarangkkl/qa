@@ -180,6 +180,49 @@ async def set_model(ws: Workspace, ch: Channel, provider: str = '', smart: str =
 	return 0
 
 
+# Connectors this can set up on its own. Deliberately a fixed list and not "any command you
+# name": this path writes a command config.yaml will later execute, so it must not become a way
+# to make the product launch anything at all. Everything else stays a reviewed file edit.
+KNOWN_CONNECTORS = {'jira': (config_mod.JIRA_MCP_COMMAND, config_mod.JIRA_MCP_ARGS)}
+
+
+async def connect(ws: Workspace, ch: Channel, name: str = '', project: str = '', config: Config | None = None) -> int:
+	"""Write a connector into config.yaml. Signing in is `qa auth`, which is a separate step."""
+	name = name.strip().lower()
+	if name not in KNOWN_CONNECTORS:
+		known = ', '.join(sorted(KNOWN_CONNECTORS))
+		await ch.log(f'Usage: qa connect {known} [--project KEY]')
+		if name:
+			await ch.log(f'❌ I do not know how to set up "{name}". Add it under `mcp:` in config.yaml by hand.')
+		return 2
+
+	command, args = KNOWN_CONNECTORS[name]
+	text = ws.config_file.read_text(encoding='utf-8')
+	# The name has to be literally "jira": jira_server() looks the server up by that exact
+	# string, so anything else shows up in the UI and then breaks file-bug and plan --ticket.
+	updated = config_mod.add_mcp_server(text, name, command, args)
+	if project.strip():
+		updated = config_mod.set_jira_project(updated, project.strip().upper())
+	changed = updated != text
+	if changed:
+		ws.config_file.write_text(updated, encoding='utf-8')
+
+	cfg = config_mod.load(ws.config_file)
+	spec = cfg.mcp_server(name)
+	if spec is None:  # the write went in but did not parse back - say so rather than claim success
+		await ch.log(f'❌ {name} is still not in config.yaml after writing it. Check the file by hand.')
+		return 1
+	await ch.emit(
+		Event(
+			'log', f'{"✅ Added" if changed else "✅ Already configured:"} {name} → {spec.command}', {'connector': name}
+		)
+	)
+	if cfg.jira_project:
+		await ch.log(f'   Default project for bugs: {cfg.jira_project}')
+	await ch.log(f'\nNext, sign in:  qa auth {name}   (opens an OAuth login in your browser)')
+	return 0
+
+
 AUTH_READY = re.compile(r'connected to remote server|proxy established|already authorized', re.I)
 AUTH_CACHE = Path.home() / '.mcp-auth'
 
@@ -281,12 +324,42 @@ async def plan(
 	force: bool = False,
 	config: Config | None = None,
 ) -> int:
+	from nkqa.jira import issue_key
 	from nkqa.planner import plan as _plan
 
 	if not ask and not ticket:
 		await ch.log('Tell me what to plan:  qa plan "<ask>"  and/or  qa plan --ticket PROJ-123')
 		return 2
+	if ticket:
+		key = issue_key(ticket)
+		if not key:
+			await ch.log(f'❌ No Jira issue key in "{ticket}". Give a key like PROJ-123, or its browse URL.')
+			return 2
+		ticket = key
 	return await _plan(ws, _cfg(ws, config), ch, ask, area, force, ticket)
+
+
+async def ticket(ws: Workspace, ch: Channel, reference: str = '', config: Config | None = None) -> int:
+	"""Read a Jira ticket and show it. Writes nothing - reading is not the same as planning.
+
+	Its own verb because the only Jira read in the product used to be buried inside
+	`plan --ticket`, where the text was hidden context for scenario generation and the side
+	effect was draft files. "What is the scope of this ticket?" had no code path at all.
+	"""
+	from nkqa.jira import issue_key, read_issue
+
+	key = issue_key(reference)
+	if not key:
+		await ch.log('Usage: qa ticket PROJ-123   (a browse URL works too)')
+		return 2
+
+	body, error = await read_issue(_cfg(ws, config), ch, key)
+	if error:
+		await ch.log(error)
+		return 2
+	await ch.emit(Event('log', f'\n### Ticket {key}\n{body}', {'ticket': key}))
+	await ch.log(f'\nDraft scenarios from it with:  qa plan --ticket {key}')
+	return 0
 
 
 async def revise(ws: Workspace, ch: Channel, scenario_id: str, instruction: str, config: Config | None = None) -> int:

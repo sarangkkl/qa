@@ -5,11 +5,13 @@
  * modal makes you read it and confirm. No one-click chip. That gate is the product.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as api from '../api/client'
-import type { Connection, ScenarioDetail, ScenarioSummary } from '../api/types'
+import type { Connection, RunDetail, ScenarioDetail, ScenarioSummary } from '../api/types'
 import type { Session } from '../api/socket'
+import { Evidence } from '../components/Evidence'
 import { Markdown, stripFrontmatter } from '../components/Markdown'
+import { Report } from '../components/Report'
 
 const STATE_LABEL: Record<string, string> = {
 	ok: 'approved',
@@ -37,6 +39,12 @@ export function Scenarios({
 	const [ticket, setTicket] = useState('')
 	const [detail, setDetail] = useState<ScenarioDetail | null>(null)
 	const [error, setError] = useState('')
+	const [view, setView] = useState<'spec' | 'result'>('spec')
+	const [report, setReport] = useState('')
+	const [run, setRun] = useState<RunDetail | null>(null)
+	// What this pane last settled on. The scenario id is half of it on purpose: without it, a
+	// scenario's first ever run is indistinguishable from opening one that had already run.
+	const seen = useRef({ id: '', run: '' })
 
 	useEffect(() => {
 		if (!selected) return setDetail(null)
@@ -49,6 +57,40 @@ export function Scenarios({
 			live = false
 		}
 	}, [connection, selected, scenarios])
+
+	// Picking a different scenario always lands on its spec.
+	useEffect(() => setView('spec'), [selected])
+
+	// latest_run_dir only names a run that wrote a results.md, so this path always exists.
+	// The run detail comes too: a verdict you cannot inspect is just a claim, so the video, the
+	// gif, the step screenshots and the transcript belong next to the report, not a tab away.
+	const lastRun = detail?.last_run ?? ''
+	useEffect(() => {
+		setReport('')
+		setRun(null)
+		if (!lastRun) return
+		let live = true
+		api
+			.text(connection, `/artifacts/runs/${encodeURIComponent(lastRun)}/results.md`)
+			.then((text) => live && setReport(text))
+			.catch(() => undefined)
+		api
+			.run(connection, lastRun)
+			.then((d) => live && setRun(d))
+			.catch(() => undefined)
+		return () => {
+			live = false
+		}
+	}, [connection, lastRun])
+
+	// A run finishing refreshes the workspace, which re-fetches this detail, which lands here as
+	// a new last_run. Showing it is the whole point of having run: you should not go looking.
+	useEffect(() => {
+		if (!detail) return
+		const before = seen.current
+		if (before.id === detail.id && lastRun && lastRun !== before.run) setView('result')
+		seen.current = { id: detail.id, run: lastRun }
+	}, [detail, lastRun])
 
 	const runnable = detail?.state === 'ok'
 
@@ -133,6 +175,25 @@ export function Scenarios({
 							</div>
 						</div>
 
+						<div className="detail-tabs">
+							<button className={view === 'spec' ? 'tab-on' : ''} onClick={() => setView('spec')}>
+								Spec
+							</button>
+							<button
+								className={view === 'result' ? 'tab-on' : ''}
+								disabled={!lastRun}
+								title={lastRun ? lastRun : 'this scenario has not been run yet'}
+								onClick={() => setView('result')}
+							>
+								Result
+								{detail.last_verdict && (
+									<span className={`verdict verdict-${detail.last_verdict.toLowerCase()}`}>
+										{detail.last_verdict}
+									</span>
+								)}
+							</button>
+						</div>
+
 						{detail.state === 'stale' && (
 							<p className="warn">
 								Edited after approval, so it has left the suite. Re-approve it to put it back — the runner
@@ -143,7 +204,9 @@ export function Scenarios({
 							<p className="warn">A draft has never been approved. It will not run and is not in the suite.</p>
 						)}
 
-						<Markdown source={stripFrontmatter(detail.body)} />
+						{view === 'spec' && <Markdown source={stripFrontmatter(detail.body)} />}
+						{view === 'result' && (report ? <Report source={report} /> : <p className="empty">Loading the report…</p>)}
+						{view === 'result' && run && <Evidence connection={connection} detail={run} />}
 					</>
 				)}
 			</div>

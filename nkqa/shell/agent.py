@@ -17,6 +17,7 @@ from nkqa.chats import Turn
 from nkqa.models import model_name, resolve_llm
 from nkqa.shell.commands import REGISTRY, Command, ShellContext, agent_commands
 from nkqa.shell.render import paint
+from nkqa.ui import Ask, Channel, Event
 
 MAX_STEPS = 3
 # A ceiling on one routing call. The client timeout in models.py bounds the HTTP request;
@@ -51,6 +52,19 @@ Answering questions about the app:
 - When the human tells you something about the app that the map gets wrong or omits, call
   `correct` with their correction as `instruction`. Pass on what THEY said - never your
   own guesses, and never a correction they did not make.
+
+Jira tickets, when a jira connector is listed under Connectors below:
+- A ticket key (PROJ-123) or an Atlassian URL means READ IT FIRST: call `ticket` with what
+  they gave you, url and all. Never say you cannot reach Jira when jira is listed - you can,
+  and saying otherwise sends them off to fix something that is not broken.
+- You are shown what `ticket` returned. Then think like a QA engineer, in `reply`:
+  what the ticket asks for, which screens and flows in the app map it touches, and what the
+  map does not cover.
+- Then ASK about what is genuinely ambiguous - acceptance criteria that cannot be checked as
+  written, roles or permissions the ticket assumes, test data it would need, an edge case it
+  is silent on. One or two sharp questions, not a checklist, and stop there.
+- Draft scenarios with `plan` (ticket=KEY) only once they have answered or said go ahead. Put
+  what they told you into `ask` so it reaches the drafts. Do not plan on the first message.
 """
 
 
@@ -77,8 +91,24 @@ def args_of(decision: ChatDecision) -> dict[str, str]:
 def describe_commands() -> str:
 	lines: list[str] = []
 	for cmd in agent_commands():
-		params = ', '.join(f'{p.name}{"*" if p.required else ""} ({p.type})' for p in cmd.params) or 'no parameters'
+		# Param.help too. Without it `plan`'s ticket param reached the model as a bare
+		# `ticket (string)` - nothing said it takes a Jira key, so it was never used.
+		params = (
+			', '.join(f'{p.name}{"*" if p.required else ""} ({p.type}: {p.help})' for p in cmd.params)
+			or 'no parameters'
+		)
 		lines.append(f'- {cmd.name}: {cmd.help} | params: {params}')
+	return '\n'.join(lines)
+
+
+def describe_connectors(ctx: ShellContext) -> str:
+	"""What the agent can reach beyond the browser. Absent, it assumed it could reach nothing."""
+	servers = ctx.config.mcp_servers
+	if not servers:
+		return '(none configured - no Jira. Setting one up is theirs to do: /connect jira)'
+	lines = [f'- {s.name}' for s in servers]
+	if ctx.config.mcp_server('jira') is not None and not ctx.config.jira_project:
+		lines.append('  jira has no default project key, so filing a bug needs one passed explicitly')
 	return '\n'.join(lines)
 
 
@@ -94,6 +124,30 @@ def replay_history(ctx: ShellContext) -> list[BaseMessage]:
 			ran = f' (ran {turn.command} -> exit {turn.exit})' if turn.command else ''
 			messages.append(AssistantMessage(content=turn.text + ran))
 	return messages
+
+
+class Recorder(Channel):
+	"""Passes everything through to the real channel and keeps a copy of the text.
+
+	A tee, not a buffer: the human still sees the output live. It exists because `route()`
+	otherwise tells the model only that a command ran and its exit code, so the agent could
+	fetch a ticket and then be unable to say a word about what was in it.
+	"""
+
+	def __init__(self, inner: Channel):
+		self.inner = inner
+		self.lines: list[str] = []
+
+	async def emit(self, event: Event) -> None:
+		if event.kind != 'frame' and event.text.strip():
+			self.lines.append(event.text)
+		await self.inner.emit(event)
+
+	async def ask(self, request: Ask) -> str:
+		return await self.inner.ask(request)
+
+	def text(self, limit: int = 8000) -> str:
+		return '\n'.join(self.lines)[:limit]
 
 
 def record(ctx: ShellContext, turn: Turn) -> None:
@@ -117,6 +171,7 @@ def describe_state(ctx: ShellContext) -> str:
 	return (
 		f'App: {ctx.config.app_name} ({ctx.config.base_url or "no base_url set"})\n\n'
 		f'Scenarios:\n{listing}\n\nRecent runs:\n{runs}\n\n'
+		f'Connectors:\n{describe_connectors(ctx)}\n\n'
 		f'=== What you know about the app (the app map) ===\n{knowledge}'
 	)
 
@@ -200,10 +255,25 @@ async def route(ctx: ShellContext, text: str) -> int:
 			record(ctx, Turn(role='assistant', text=refusal))
 			return 1
 
-		last_code = await cmd.handler(ctx, coerce(cmd, chosen))
+		# A capturing channel only for the commands whose output the agent has to reason about;
+		# everything else keeps streaming straight to the user as it always did.
+		capture = Recorder(ctx.channel) if cmd.feeds_context else None
+		if capture is not None:
+			ctx.channel = capture
+		try:
+			last_code = await cmd.handler(ctx, coerce(cmd, chosen))
+		finally:
+			if capture is not None:
+				ctx.channel = capture.inner
+
 		record(ctx, Turn(role='assistant', text=decision.reply, command=name, args=chosen, exit=last_code))
 		messages.append(AssistantMessage(content=f'ran {name} -> exit {last_code}'))
+		said = capture.text() if capture is not None else ''
 		messages.append(
-			UserMessage(content=f'`{name}` finished with exit code {last_code}. Anything else needed for the request?')
+			UserMessage(
+				content=f'`{name}` returned:\n{said}\n\nAnswer the human from this.'
+				if said
+				else f'`{name}` finished with exit code {last_code}. Anything else needed for the request?'
+			)
 		)
 	return last_code

@@ -6,7 +6,11 @@ disk the moment it is understood, and a screen already documented is not mapped 
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from conftest import FakeChannel
@@ -14,6 +18,7 @@ from conftest import FakeChannel
 from nkqa import appmap, crawler, workspace
 from nkqa.config import Config
 from nkqa.hitl import HumanInTheLoop
+from nkqa.ui import Event
 from nkqa.workspace import Workspace
 
 APP = Config(base_url='https://shop.test')
@@ -148,3 +153,56 @@ def test_a_flow_is_recorded_but_never_clobbers_an_existing_one(ws: Workspace) ->
 	said = asyncio.run(recorder(ws).flow('Login', 'Something else.'))
 	assert 'already exists' in said
 	assert 'sign in' in (ws.appmap_dir / 'flows' / 'login.md').read_text()
+
+
+def test_the_crawl_narrates_itself_like_every_other_run(ws: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""A crawl ran for seventeen minutes showing nothing: it was the one runner that never
+	entered `stream.forward`, so browser-use's narration went nowhere and the live pane stayed
+	black. Without both of these there is no way to tell a working crawl from a stuck one.
+	"""
+	entered: list[str] = []
+	steps_seen: list[int] = []
+
+	@asynccontextmanager
+	async def fake_forward(channel: Any, secrets: Any = None) -> AsyncGenerator[None]:
+		entered.append('forward')
+		yield
+
+	@asynccontextmanager
+	async def fake_screencast(agent: Any, channel: Any) -> AsyncGenerator[None]:
+		entered.append('screencast')
+		yield
+
+	def fake_step_event(agent: Any, n: int, run_dir: Any = None) -> Event:
+		steps_seen.append(n)
+		return Event('step', f'step {n}', {'n': n})
+
+	def no_llm(*_a: Any, **_k: Any) -> None:
+		return None
+
+	class OneStepAgent:
+		def __class_getitem__(cls, _item: Any) -> type['OneStepAgent']:
+			return cls
+
+		def __init__(self, *_: Any, **__: Any) -> None:
+			self.history = SimpleNamespace(history=[], structured_output=None)
+
+		async def run(self, max_steps: int = 0, on_step_end: Any = None) -> Any:
+			await on_step_end(self)
+			return self.history
+
+		def save_history(self, path: Path) -> None: ...
+		def stop(self) -> None: ...
+
+	monkeypatch.setattr(crawler, 'Agent', OneStepAgent)
+	monkeypatch.setattr(crawler, 'resolve_llm', no_llm)
+	monkeypatch.setattr(crawler.stream, 'forward', fake_forward)
+	monkeypatch.setattr(crawler.screencast, 'stream', fake_screencast)
+	monkeypatch.setattr(crawler.stream, 'step_event', fake_step_event)
+
+	hitl = HumanInTheLoop(ws.permissions_file)
+	ch = FakeChannel()
+	asyncio.run(crawler.crawl(ws, APP, hitl, ch, 2))
+
+	assert entered == ['forward', 'screencast'], 'a crawl must stream its narration and its browser'
+	assert steps_seen == [1], 'and emit a step event per step, like run and replay do'

@@ -5,6 +5,7 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 
 import asyncio
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -90,6 +91,81 @@ def test_one_scenario_and_missing(client: TestClient) -> None:
 	body = get(client, '/scenarios/auth/login').json()
 	assert body['title'] == 'Login works' and 'Open the login page.' in body['body']
 	assert get(client, '/scenarios/no/such').status_code == 404
+
+
+def write_run(ws: Workspace, name: str, verdict: str, body: str = '') -> Path:
+	"""A run directory as far as the report layer is concerned: a results.md with the header."""
+	run_dir = ws.runs_dir / name
+	run_dir.mkdir(parents=True)
+	(run_dir / 'results.md').write_text(f'# auth/login — {verdict} — 2026-09-06 18:58\n{body}')
+	return run_dir
+
+
+def test_a_scenario_names_the_run_behind_its_verdict(client: TestClient, ws: Workspace) -> None:
+	"""Without last_run the UI knows a scenario failed but has no way to show why."""
+	assert get(client, '/workspace').json()['scenarios'][0]['last_run'] == ''
+	assert get(client, '/scenarios/auth/login').json()['last_run'] == ''
+
+	write_run(ws, 'auth-login--20260906-100000', 'FAIL')
+	for body in (get(client, '/workspace').json()['scenarios'][0], get(client, '/scenarios/auth/login').json()):
+		assert body['last_run'] == 'auth-login--20260906-100000'
+		assert body['last_verdict'] == 'FAIL'
+
+
+def test_last_run_and_last_verdict_agree_on_the_newest_run(client: TestClient, ws: Workspace) -> None:
+	"""They resolve the run separately, so they can disagree - and then the UI shows the wrong report."""
+	old = write_run(ws, 'auth-login--20260906-100000', 'FAIL')
+	new = write_run(ws, 'auth-login--20260906-110000', 'PASS')
+	os.utime(old / 'results.md', (1_700_000_000, 1_700_000_000))
+	os.utime(new / 'results.md', (1_800_000_000, 1_800_000_000))
+
+	body = get(client, '/scenarios/auth/login').json()
+	assert body['last_run'] == 'auth-login--20260906-110000'
+	assert body['last_verdict'] == 'PASS'
+
+
+def test_the_report_named_by_last_run_is_servable(client: TestClient, ws: Workspace) -> None:
+	"""The contract the Result tab rests on: last_run -> an artifact path that returns the report."""
+	write_run(ws, 'auth-login--20260906-100000', 'FAIL', '| # | Step | Verdict |\n')
+	name = get(client, '/scenarios/auth/login').json()['last_run']
+	response = get(client, f'/artifacts/runs/{name}/results.md')
+	assert response.status_code == 200 and '| # | Step | Verdict |' in response.text
+
+
+def test_a_run_lists_its_evidence_as_files_that_can_be_opened(client: TestClient, ws: Workspace) -> None:
+	"""The report links `videos/` and `conversation/`. Those are directories, and the artifact
+	route serves files only - so the report's own evidence links can never resolve. Listing the
+	files is what turns "evidence exists" into "evidence you can open"."""
+	run_dir = write_run(ws, 'auth-login--20260906-100000', 'FAIL')
+	(run_dir / 'steps').mkdir()
+	(run_dir / 'conversation').mkdir()
+	for n in (1, 2, 10):
+		(run_dir / 'steps' / f'step-{n:03d}.png').write_bytes(b'\x89PNG')
+		(run_dir / 'conversation' / f'conversation_abc_{n}.txt').write_text(f'step {n}')
+	(run_dir / 'history.json').write_text('{"history": []}')
+
+	body = get(client, '/runs/auth-login--20260906-100000').json()
+	assert [p.rsplit('_', 1)[-1] for p in body['conversation']] == ['1.txt', '2.txt', '10.txt'], (
+		'plain sorting puts _10 before _2, which reads as a shuffled transcript'
+	)
+	assert len(body['shots']) == 3
+
+	for path in [*body['shots'], *body['conversation'], body['artifacts']['history']]:
+		assert get(client, path).status_code == 200, f'{path} is listed but cannot be fetched'
+
+
+def test_a_directory_is_not_servable_which_is_why_the_files_are_listed(client: TestClient, ws: Workspace) -> None:
+	run_dir = write_run(ws, 'auth-login--20260906-100000', 'FAIL')
+	(run_dir / 'conversation').mkdir()
+	(run_dir / 'conversation' / 'conversation_abc_1.txt').write_text('hi')
+	assert get(client, '/artifacts/runs/auth-login--20260906-100000/conversation/').status_code == 404
+
+
+def test_a_run_with_no_evidence_reports_empty_lists_not_an_error(client: TestClient, ws: Workspace) -> None:
+	"""Every existing run predates video recording; the UI has to say so rather than break."""
+	write_run(ws, 'auth-login--20260906-100000', 'PASS')
+	body = get(client, '/runs/auth-login--20260906-100000').json()
+	assert body['videos'] == [] and body['shots'] == [] and body['conversation'] == []
 
 
 def test_artifacts_cannot_escape_the_workspace(ws: Workspace, tmp_path: Path) -> None:
@@ -736,3 +812,97 @@ def test_connector_view_never_leaks_env_values(client: TestClient, ws: Workspace
 	body = get(client, '/workspace').text
 	assert 'REAL_SECRET' not in body  # only the key name travels
 	assert '"needs_env":["TOKEN"]' in body.replace(' ', '')
+
+
+def test_a_step_screenshot_is_served_at_the_path_the_step_event_emits(client: TestClient, ws: Workspace) -> None:
+	"""Closes the loop: the live pane was handed a temp-dir filesystem path it could never load.
+
+	`stream.step_event` now copies the shot into the run and emits this exact URL shape, so the
+	two halves have to agree or the stage goes black again.
+	"""
+	from nkqa.execution import stream
+
+	run_dir = ws.runs_dir / 'checkout--20260906-1200'
+	run_dir.mkdir(parents=True)
+	source = ws.root / 'from-a-temp-dir.png'
+	source.write_bytes(b'\x89PNG fake')
+
+	url = stream.keep_shot(str(source), run_dir, 7)
+
+	assert url == '/artifacts/runs/checkout--20260906-1200/steps/step-007.png'
+	served = get(client, url)
+	assert served.status_code == 200
+	assert served.content == b'\x89PNG fake'
+
+
+def test_connecting_jira_shows_up_in_the_workspace(client: TestClient) -> None:
+	"""The round trip Settings depends on: press Connect, the row appears.
+
+	`hasJira` in the frontend keys off this list, and it gates plan-from-ticket and file-a-bug
+	as well as the Sign in button - so if this does not come back, a third of the UI stays
+	hidden with no explanation.
+	"""
+	assert get(client, '/workspace').json()['connectors'] == []
+
+	frames = run_frames(client, [{'type': 'command', 'id': 'k1', 'name': 'connect', 'args': {'name': 'jira'}}])
+	assert frames[-1]['code'] == 0
+
+	connectors = get(client, '/workspace').json()['connectors']
+	assert [c['name'] for c in connectors] == ['jira']
+	assert 'npx' in connectors[0]['command']
+	# The safety default has to survive the round trip, not just the write.
+	assert connectors[0]['expose_to_executor'] is False
+
+
+def test_the_project_key_reaches_the_ui(client: TestClient) -> None:
+	run_frames(
+		client,
+		[{'type': 'command', 'id': 'k1', 'name': 'connect', 'args': {'name': 'jira', 'project': 'proj'}}],
+	)
+	connectors = get(client, '/workspace').json()['connectors']
+	assert connectors[0]['project'] == 'PROJ'
+
+
+def test_a_connector_can_be_added_while_a_job_is_parked(client: TestClient, ws: Workspace) -> None:
+	"""Settings has to work during a run - `connect` is instant for the same reason set-model is."""
+	with client.websocket_connect(f'/session?token={TOKEN}') as socket:
+		socket.send_json({'type': 'command', 'id': 'j1', 'name': 'approve', 'args': {'id': 'auth/login'}})
+		while (parked := socket.receive_json())['type'] != 'ask':
+			pass
+
+		socket.send_json({'type': 'command', 'id': 'k1', 'name': 'connect', 'args': {'name': 'jira'}})
+		while (frame := socket.receive_json())['type'] != 'result' or frame['job'] != 'k1':
+			pass
+		assert frame['code'] == 0, 'the connectors page must work during a run'
+
+		socket.send_json({'type': 'answer', 'id': parked['id'], 'value': 'n'})
+		while (frame := socket.receive_json())['type'] != 'result' or frame['job'] != 'j1':
+			pass
+
+	from nkqa import config as config_mod
+
+	assert config_mod.load(ws.config_file).mcp_server('jira') is not None
+
+
+def test_a_command_that_raises_still_returns_a_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""A handler that throws used to leave the job at `working…` forever.
+
+	The exception escaped the handler, `JobRunner.wait` only catches CancelledError, and the
+	task that sends the `result` frame died before sending one - so the UI had no code, no error
+	and no way to tell a thrown command from a slow one. Reported three times as "it just keeps
+	working", from three different causes; this is the one that covers all of them.
+	"""
+	from nkqa.shell.commands import REGISTRY
+
+	async def explode(ctx: Any, args: dict[str, Any]) -> int:
+		raise RuntimeError('jira fell over')
+
+	monkeypatch.setattr(REGISTRY['scenarios'], 'handler', explode)
+
+	frames = run_frames(client, [{'type': 'command', 'id': 'c1', 'name': 'scenarios'}])
+
+	assert frames[-1]['type'] == 'result'
+	assert frames[-1]['code'] == 1
+	assert 'jira fell over' in frames[-1]['error']
+	# ...and the human is told in the log too, not only in a field a UI might ignore.
+	assert any('jira fell over' in f.get('text', '') for f in frames if f['type'] == 'event')

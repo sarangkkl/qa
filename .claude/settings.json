@@ -59,7 +59,18 @@
       "Bash(venv/bin/python -m pytest tests/test_appmap.py -q)",
       "Bash(venv/bin/python -m pytest tests/test_appmap.py -q -k \"echoing_the_label\")",
       "Bash(cp appmap/appmap/overview.md overview.md)",
-      "Bash(rm -rf appmap)"
+      "Bash(rm -rf appmap)",
+      "Bash(venv/bin/python -m pytest tests/test_stream.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_model_settings.py tests/test_appmap.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_connect.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_jira.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_planner.py -q)",
+      "Bash(timeout 120 /Users/gaurav/Documents/dreams/nkqa/browser-use/venv/bin/qa ticket https://slrconsulting.atlassian.net/browse/PNY-3689)",
+      "Bash(timeout 120 /Users/gaurav/Documents/dreams/nkqa/browser-use/venv/bin/qa ticket PNY-3689)",
+      "Bash(echo \"---exit=$?\")",
+      "Bash(cp nkqa/models.py /tmp/models.py.bak)",
+      "Bash(venv/bin/pytest tests/test_model_settings.py -q)",
+      "Bash(grep -vE \"^\\\\s*#|^\\\\s*$\" /Users/gaurav/Documents/slrtesting/config.yaml)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",

@@ -388,3 +388,87 @@ def test_command_arguments_survive_the_round_trip() -> None:
 	)
 	assert agent.args_of(decision) == {'run': 'demo--1', 'step': '2'}
 	assert agent.coerce(REGISTRY['file-bug'], agent.args_of(decision)) == {'run': 'demo--1', 'step': 2}
+
+
+# --- reading a Jira ticket --------------------------------------------------
+
+
+def with_jira(ctx: ShellContext, project: str = '') -> ShellContext:
+	from nkqa.config import MCPServer
+
+	ctx.config.mcp_servers = [MCPServer(name='jira', command='npx', args=['-y', 'mcp-remote'])]
+	ctx.config.jira_project = project
+	return ctx
+
+
+def test_the_router_is_told_which_connectors_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""It said "we're not connected to your Jira" 25 seconds after a successful OAuth sign-in.
+
+	Nothing in its prompt mentioned connectors, so combined with "say when you do not know", a
+	refusal was the behaviour the prompt asked for.
+	"""
+	ctx = with_jira(make_ctx(tmp_path))
+	llm = capture(monkeypatch, [agent.ChatDecision(reply='Reading it.', command='')])
+
+	asyncio.run(session.handle(ctx, 'can you see PNY-3689?'))
+
+	assert 'Connectors:' in llm.prompt and 'jira' in llm.prompt
+	# The empty project key is worth saying: file-bug fails without one.
+	assert 'no default project key' in llm.prompt
+
+
+def test_no_connectors_is_stated_not_left_blank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	ctx = make_ctx(tmp_path)
+	llm = capture(monkeypatch, [agent.ChatDecision(reply='ok', command='')])
+
+	asyncio.run(session.handle(ctx, 'hi'))
+	assert 'none configured' in llm.prompt and '/connect jira' in llm.prompt
+
+
+def test_the_model_is_told_what_each_parameter_means() -> None:
+	"""`plan`'s ticket param reached the model as a bare `ticket (string)`.
+
+	Nothing said it takes a Jira key and fetches the issue, so it was never used - the router
+	asked the human to paste the acceptance criteria by hand instead.
+	"""
+	listing = agent.describe_commands()
+	plan_line = next(line for line in listing.splitlines() if line.startswith('- plan:'))
+	assert 'Jira ticket key' in plan_line
+	assert 'ticket: read a Jira ticket' in listing
+
+
+def test_what_a_command_printed_reaches_the_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""The load-bearing one. Reading a ticket is useless if the agent cannot then discuss it.
+
+	`route` used to append only `ran <name> -> exit <code>`, so a command's output never
+	reached the model at all.
+	"""
+	ctx = with_jira(make_ctx(tmp_path))
+
+	async def fake_ticket(inner_ctx: ShellContext, args: dict[str, Any]) -> int:
+		await inner_ctx.ch.log('### Ticket PNY-3689\nBulk-assign reviewers. AC: PM can pick several.')
+		return 0
+
+	monkeypatch.setattr(REGISTRY['ticket'], 'handler', fake_ticket)
+	llm = capture(
+		monkeypatch,
+		[
+			agent.ChatDecision(
+				reply='Reading it.',
+				command='ticket',
+				args=[agent.ChatArg(name='id', value='https://x.atlassian.net/browse/PNY-3689')],
+			),
+			agent.ChatDecision(reply='It is about bulk-assigning reviewers. Which roles may do it?', command=''),
+		],
+	)
+
+	asyncio.run(session.handle(ctx, 'whats the scope of https://x.atlassian.net/browse/PNY-3689'))
+
+	assert 'Bulk-assign reviewers' in llm.prompt, 'the agent must see what the ticket said'
+	assert llm.calls == 2, 'read, then talk about it'
+
+
+def test_reading_a_ticket_is_something_the_agent_may_do() -> None:
+	assert 'ticket' in {c.name for c in agent_commands()}
+	assert REGISTRY['ticket'].instant is True  # reads Jira, writes nothing, never asks
+	assert REGISTRY['ticket'].feeds_context is True

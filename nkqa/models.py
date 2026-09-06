@@ -23,21 +23,66 @@ ROLES = ('planner', 'executor', 'reflector', 'chat', 'fallback')
 # reason the roles exist - collapsing them onto one model makes every run either slow or dim.
 TIERS = ('smart', 'fast')
 
-# What the settings page offers. Ids are passed to the provider verbatim (the `provider:id`
-# form), so this list is presentation, not validation: a model shipped after this release is
-# still reachable by typing its id, and nothing here has to be edited for that to work.
+# What the settings page offers, newest first. Ids are passed to the provider verbatim (the
+# `provider:id` form), so this list is presentation, not validation: a model shipped after this
+# release is still reachable by typing its id, and nothing here has to be edited for that to work.
+#
+# Every id here was checked against GET /v1/models/{id}. That matters: the list this replaced
+# offered `gpt-5.1-mini`, which the API 404s on, as OpenAI's *default* fast model - so switching
+# provider pointed executor, reflector, chat and fallback at a model that does not exist. Being a
+# catalogue and not a validator excuses a model that is missing from it, never one that is invented.
+#
+# Chat models only. The providers also serve image, audio, tts, realtime, transcribe, embedding
+# and moderation models, plus `-codex` and `-chat-latest` variants and dated snapshots of what is
+# already here; none of them are what an agent drives a browser with.
 CATALOGUE: dict[str, list[dict[str, str]]] = {
 	'anthropic': [
 		{'id': 'claude-opus-5', 'label': 'Claude Opus 5', 'tier': 'smart'},
 		{'id': 'claude-sonnet-5', 'label': 'Claude Sonnet 5', 'tier': 'smart'},
+		{'id': 'claude-fable-5-1', 'label': 'Claude Fable 5.1', 'tier': 'smart'},
+		{'id': 'claude-fable-5', 'label': 'Claude Fable 5', 'tier': 'smart'},
+		{'id': 'claude-opus-4-8', 'label': 'Claude Opus 4.8', 'tier': 'smart'},
+		{'id': 'claude-opus-4-7', 'label': 'Claude Opus 4.7', 'tier': 'smart'},
+		{'id': 'claude-opus-4-6', 'label': 'Claude Opus 4.6', 'tier': 'smart'},
+		{'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6', 'tier': 'smart'},
+		{'id': 'claude-opus-4-5', 'label': 'Claude Opus 4.5', 'tier': 'smart'},
+		{'id': 'claude-sonnet-4-5', 'label': 'Claude Sonnet 4.5', 'tier': 'smart'},
 		{'id': 'claude-haiku-4-5', 'label': 'Claude Haiku 4.5', 'tier': 'fast'},
 	],
 	'openai': [
+		{'id': 'gpt-6-astra', 'label': 'GPT-6 Astra', 'tier': 'smart'},
+		{'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna', 'tier': 'smart'},
+		{'id': 'gpt-5.6-sol', 'label': 'GPT-5.6 Sol', 'tier': 'smart'},
+		{'id': 'gpt-5.6-terra', 'label': 'GPT-5.6 Terra', 'tier': 'smart'},
+		{'id': 'gpt-5.5', 'label': 'GPT-5.5', 'tier': 'smart'},
+		{'id': 'gpt-5.5-pro', 'label': 'GPT-5.5 Pro', 'tier': 'smart'},
+		{'id': 'gpt-5.4', 'label': 'GPT-5.4', 'tier': 'smart'},
+		{'id': 'gpt-5.4-pro', 'label': 'GPT-5.4 Pro', 'tier': 'smart'},
+		{'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini', 'tier': 'fast'},
+		{'id': 'gpt-5.4-nano', 'label': 'GPT-5.4 nano', 'tier': 'fast'},
+		{'id': 'gpt-5.2', 'label': 'GPT-5.2', 'tier': 'smart'},
+		{'id': 'gpt-5.2-pro', 'label': 'GPT-5.2 Pro', 'tier': 'smart'},
 		{'id': 'gpt-5.1', 'label': 'GPT-5.1', 'tier': 'smart'},
-		{'id': 'gpt-5.1-mini', 'label': 'GPT-5.1 mini', 'tier': 'fast'},
 		{'id': 'gpt-5', 'label': 'GPT-5', 'tier': 'smart'},
+		{'id': 'gpt-5-pro', 'label': 'GPT-5 Pro', 'tier': 'smart'},
 		{'id': 'gpt-5-mini', 'label': 'GPT-5 mini', 'tier': 'fast'},
+		{'id': 'gpt-5-nano', 'label': 'GPT-5 nano', 'tier': 'fast'},
+		{'id': 'o4-mini', 'label': 'o4-mini', 'tier': 'fast'},
+		{'id': 'o3', 'label': 'o3', 'tier': 'smart'},
+		{'id': 'o3-mini', 'label': 'o3-mini', 'tier': 'fast'},
+		{'id': 'o1', 'label': 'o1', 'tier': 'smart'},
+		{'id': 'o1-pro', 'label': 'o1-pro', 'tier': 'smart'},
 	],
+}
+
+# What choosing a provider alone means. Explicit rather than "the first entry of that tier",
+# because that rule made the list's display order silently decide which model runs - and it was
+# re-implemented a second time in the settings page, free to disagree with this one.
+# Not the newest by name: gpt-6-astra and the gpt-5.6 variants lead the dropdown, but a default
+# is what runs when nobody chose, so it goes to the newest plain-numbered pair instead.
+DEFAULTS: dict[str, dict[str, str]] = {
+	'anthropic': {'smart': 'claude-opus-5', 'fast': 'claude-haiku-4-5'},
+	'openai': {'smart': 'gpt-5.5', 'fast': 'gpt-5.4-mini'},
 }
 
 PROVIDER_LABELS = {'anthropic': 'Anthropic', 'openai': 'OpenAI'}
@@ -49,8 +94,7 @@ _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
 def default_tier_models(provider: str) -> dict[str, str]:
 	"""The provider's own smart/fast picks - what choosing a provider alone means."""
-	entries = CATALOGUE[provider]
-	return {tier: next(e['id'] for e in entries if e['tier'] == tier) for tier in TIERS}
+	return dict(DEFAULTS[provider])
 
 
 def qualify(provider: str, model: str) -> str:

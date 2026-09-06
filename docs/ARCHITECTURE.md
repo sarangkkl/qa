@@ -288,6 +288,8 @@ qa correct "<what is true>"        # fix what the app map gets wrong, in your ow
 qa suite [--tag T] [--strict]           # run every approved scenario -> one CI report
 qa compare [a] [b]                      # what changed between two suite runs
 qa vault [status|set|rm|grant|revoke]   # stored credentials and their grants
+qa connect jira [--project KEY]         # write the connector into config.yaml
+qa auth [server] [--reset]              # OAuth sign-in for a configured connector
 qa list / qa models        # recorded runs · model roles, providers, key presence
 qa set-model --provider anthropic|openai [--smart ID] [--fast ID]   # point the tiers at a provider
 qa file-bug <run> [--step N]            # push a finding to Jira with repro + evidence

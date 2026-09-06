@@ -79,7 +79,7 @@ async def replay(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, history_file:
 	)
 	from nkqa.execution import stream
 
-	async with stream.forward(ch):
+	async with stream.forward(ch, hitl.secrets):
 		results = await agent.load_and_rerun(history_file, variables=variables or None, skip_failures=True)
 
 	failed = 0

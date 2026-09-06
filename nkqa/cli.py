@@ -69,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
 	replay.add_argument('--all', action='store_true', help='replay every recorded run (CI mode)')
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
 
+	ticket = sub.add_parser('ticket', help='read a Jira ticket and show it (no scenarios written)')
+	ticket.add_argument('id', help='issue key like PROJ-123, or its browse URL')
+
+	connect = sub.add_parser('connect', help='set up a connector in config.yaml (jira), then sign in with qa auth')
+	connect.add_argument('name', nargs='?', default='', help='connector to set up, e.g. jira')
+	connect.add_argument('--project', default='', metavar='KEY', help='default Jira project key for filing bugs')
+
 	auth = sub.add_parser('auth', help='sign in to configured MCP servers (Jira) and verify them')
 	auth.add_argument('server', nargs='?', default='', help='server name from config.yaml mcp: (default: all)')
 	auth.add_argument('--reset', action='store_true', help='clear cached logins and sign in again')
@@ -142,6 +149,10 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.list_runs(ws, ch)))
 	if command == 'set-model':
 		sys.exit(actions.run_sync(actions.set_model(ws, ch, args.provider, args.smart, args.fast)))
+	if command == 'ticket':
+		sys.exit(actions.run_sync(actions.ticket(ws, ch, args.id)))
+	if command == 'connect':
+		sys.exit(actions.run_sync(actions.connect(ws, ch, args.name, args.project)))
 	if command == 'auth':
 		sys.exit(actions.run_sync(actions.auth(ws, ch, args.server, args.reset)))
 	if command == 'plan':

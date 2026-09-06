@@ -125,11 +125,11 @@ async def _record(
 		with contextlib.suppress(Exception):
 			active_agent.save_history(run_dir / 'history.json')
 		with contextlib.suppress(Exception):
-			await ch.emit(stream.step_event(active_agent, steps))
+			await ch.emit(stream.step_event(active_agent, steps, run_dir))
 
 	run_error: BaseException | None = None
 	try:
-		async with stream.forward(ch), screencast.stream(agent, ch):
+		async with stream.forward(ch, hitl.secrets), screencast.stream(agent, ch):
 			history = await agent.run(max_steps=config.max_steps, on_step_end=checkpoint)
 		await ch.log('\n=== FINAL RESULT ===')
 		await ch.log(str(history.final_result()))

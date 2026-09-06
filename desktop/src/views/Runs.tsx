@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import * as api from '../api/client'
-import { artifactUrl } from '../api/connection'
 import type { Session } from '../api/socket'
 import type { Connection, RunDetail } from '../api/types'
-import { Markdown } from '../components/Markdown'
+import { Evidence } from '../components/Evidence'
+import { Report } from '../components/Report'
 
 export function Runs({
 	connection,
@@ -94,13 +94,8 @@ export function Runs({
 							)}
 						</div>
 
-						{detail.artifacts.gif && (
-							<img className="evidence-gif" src={artifactUrl(connection, detail.artifacts.gif)} alt="run summary" />
-						)}
-						{detail.videos.map((v) => (
-							<video key={v} className="evidence-video" controls src={artifactUrl(connection, v)} />
-						))}
-						{report && <Markdown source={report} />}
+						{report && <Report source={report} />}
+						<Evidence connection={connection} detail={detail} />
 					</>
 				)}
 			</div>

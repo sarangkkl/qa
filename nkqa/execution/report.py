@@ -107,11 +107,10 @@ def latest_run_dir(runs_dir: Path, scenario_id: str) -> Path | None:
 
 def last_verdict(runs_dir: Path, scenario_id: str) -> str:
 	"""Latest verdict for a scenario ('PASS'/'FAIL'/'BLOCKED'), '' if never run."""
-	slug = scenario_id.replace('/', '-')
-	candidates = sorted(runs_dir.glob(f'{slug}--*/results.md'), key=lambda p: p.stat().st_mtime)
-	if not candidates:
+	run_dir = latest_run_dir(runs_dir, scenario_id)
+	if run_dir is None:
 		return ''
-	first_line = candidates[-1].read_text(encoding='utf-8').splitlines()[0]
+	first_line = (run_dir / 'results.md').read_text(encoding='utf-8').splitlines()[0]
 	for v in ('PASS', 'FAIL', 'BLOCKED'):
 		if f'— {v} —' in first_line:
 			return v

@@ -80,9 +80,13 @@ export function ModelPicker({
 	// Switching provider is not a half-move: the previous provider's ids mean nothing to the
 	// new one, so both tiers go to that provider's own picks and can be narrowed after.
 	const pickProvider = (name: string) => {
-		const models = providers.find((p) => p.name === name)?.models ?? []
-		const first = (tier: string) => models.find((m) => m.tier === tier)?.id ?? models[0]?.id ?? ''
-		setDraft({ provider: name, smart: first('smart'), fast: first('fast') })
+		const chosen = providers.find((p) => p.name === name)
+		const models = chosen?.models ?? []
+		// The server's picks, not the first entry of each tier: deriving it here as well is how
+		// this page and `qa set-model --provider` got to disagree about the same question.
+		const pick = (tier: string) =>
+			chosen?.defaults?.[tier] ?? models.find((m) => m.tier === tier)?.id ?? models[0]?.id ?? ''
+		setDraft({ provider: name, smart: pick('smart'), fast: pick('fast') })
 	}
 
 	const apply = () =>

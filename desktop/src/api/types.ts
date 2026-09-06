@@ -36,6 +36,8 @@ export interface ScenarioSummary {
 	approved_by: string
 	approved_at: string
 	last_verdict: string
+	/** Run directory behind `last_verdict`; '' if never run. Its results.md is servable as-is. */
+	last_run: string
 }
 
 export interface ConnectorInfo {
@@ -78,6 +80,8 @@ export interface ProviderInfo {
 	name: string
 	label: string
 	models: ModelChoice[]
+	/** tier -> model id: what picking this provider alone means. The server decides, not list order. */
+	defaults: Record<string, string>
 }
 
 export interface WorkspaceState {
@@ -119,6 +123,10 @@ export interface RunDetail {
 	} | null
 	artifacts: Partial<Record<'report' | 'gif' | 'history', string>>
 	videos: string[]
+	/** Per-step screenshots, in step order. */
+	shots: string[]
+	/** The LLM transcript, one file per step, in step order. */
+	conversation: string[]
 }
 
 export interface ChatSummary {

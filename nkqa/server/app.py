@@ -14,6 +14,7 @@ slash parser and the chat agent's tool list, so a new command appears in all thr
 
 import asyncio
 import json
+import re
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from nkqa import chats as chats_mod
 from nkqa import config as config_mod
 from nkqa import scenarios as scenarios_mod
 from nkqa.execution.evidence import recorded_runs, step_count
-from nkqa.execution.report import last_verdict, read_results
+from nkqa.execution.report import last_verdict, latest_run_dir, read_results
 from nkqa.hitl import HumanInTheLoop
 from nkqa.server import auth
 from nkqa.server.channel import SocketChannel
@@ -39,6 +40,10 @@ MEDIA_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.j
 
 
 def scenario_view(ws: Workspace, s: scenarios_mod.Scenario) -> dict[str, Any]:
+	# last_run is what makes the verdict inspectable: latest_run_dir only matches a run that
+	# wrote a results.md, so /artifacts/runs/<last_run>/results.md is a report the UI can fetch
+	# without asking /runs/{name} first. Without it a scenario knew it had failed but not where.
+	run_dir = latest_run_dir(ws.runs_dir, s.id)
 	return {
 		'id': s.id,
 		'title': s.title,
@@ -48,6 +53,7 @@ def scenario_view(ws: Workspace, s: scenarios_mod.Scenario) -> dict[str, Any]:
 		'approved_by': s.approved_by,
 		'approved_at': s.approved_at,
 		'last_verdict': last_verdict(ws.runs_dir, s.id),
+		'last_run': run_dir.name if run_dir else '',
 	}
 
 
@@ -94,6 +100,19 @@ def coerce(name: str, args: dict[str, Any]) -> dict[str, Any]:
 		else:
 			out[key] = str(value)
 	return out
+
+
+def _ordered(directory: Path, pattern: str) -> list[Path]:
+	"""Files in step order. Plain sorting puts `..._10.txt` before `..._2.txt`, which reads as
+	a shuffled transcript - so order on the trailing number when there is one."""
+	if not directory.is_dir():
+		return []
+
+	def key(p: Path) -> tuple[int, str]:
+		digits = re.findall(r'\d+', p.stem)
+		return (int(digits[-1]) if digits else 0, p.name)
+
+	return sorted(directory.glob(pattern), key=key)
 
 
 def safe_artifact(ws: Workspace, relative: str) -> Path:
@@ -145,7 +164,7 @@ def create_app(ws: Workspace) -> FastAPI:
 
 	@app.get('/workspace', dependencies=guard)
 	def workspace_state() -> dict[str, Any]:
-		from nkqa.models import CATALOGUE, PROVIDER_LABELS
+		from nkqa.models import CATALOGUE, PROVIDER_LABELS, default_tier_models
 
 		cfg = config_mod.load(ws.config_file)
 		return {
@@ -159,7 +178,14 @@ def create_app(ws: Workspace) -> FastAPI:
 			# in reaches the provider verbatim, so this list going stale costs a convenience,
 			# never a capability.
 			'providers': [
-				{'name': name, 'label': PROVIDER_LABELS.get(name, name), 'models': entries}
+				{
+					'name': name,
+					'label': PROVIDER_LABELS.get(name, name),
+					'models': entries,
+					# Sent rather than inferred from the order of `models`: the settings page used to
+					# re-derive this itself and could quietly disagree with what the CLI would pick.
+					'defaults': default_tier_models(name),
+				}
 				for name, entries in CATALOGUE.items()
 			],
 			'appmap': sorted(str(f.relative_to(ws.appmap_dir)) for f in ws.appmap_dir.rglob('*.md')),
@@ -194,6 +220,13 @@ def create_app(ws: Workspace) -> FastAPI:
 			'result': record.model_dump() if record else None,
 			'artifacts': artifacts,
 			'videos': [f'/artifacts/runs/{name}/videos/{v}' for v in videos],
+			# The report links these as `videos/` and `conversation/`, which are directories -
+			# safe_artifact only serves files, so those links could never resolve. Listing the
+			# files is what makes the evidence openable instead of merely mentioned.
+			'shots': [f'/artifacts/runs/{name}/steps/{p.name}' for p in _ordered(run_dir / 'steps', '*.png')],
+			'conversation': [
+				f'/artifacts/runs/{name}/conversation/{p.name}' for p in _ordered(run_dir / 'conversation', '*.txt')
+			],
 		}
 
 	@app.get('/chats', dependencies=guard)
@@ -360,11 +393,23 @@ async def _launch(
 	transcribe = name if line and 'chat' in frame else ''
 
 	async def watch() -> None:
-		code, cancelled = await jobs.wait(job)
+		error = ''
+		cancelled = False
+		code = 1
+		try:
+			code, cancelled = await jobs.wait(job)
+		except Exception as e:
+			# A handler that raises used to take this task down with it, so no `result` frame was
+			# ever sent and the job sat at `working…` for good - no code, no error, no way to
+			# tell. Every command reaches the UI through here, so the guard belongs here rather
+			# than in whichever handler happened to throw.
+			error = f'{type(e).__name__}: {e}'
+			await send({'type': 'event', 'job': job_id, 'kind': 'log', 'text': f'💥 {error}', 'data': {}})
 		if transcribe:
 			from nkqa.shell.agent import record
 
 			record(ctx, chats_mod.Turn(role='assistant', text='', command=transcribe, exit=code))
-		await send({'type': 'result', 'job': job_id, 'code': code, 'cancelled': cancelled})
+		result: dict[str, Any] = {'type': 'result', 'job': job_id, 'code': code, 'cancelled': cancelled}
+		await send({**result, 'error': error} if error else result)
 
 	return asyncio.create_task(watch())

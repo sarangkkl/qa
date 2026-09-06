@@ -14,7 +14,7 @@ from conftest import FakeChannel
 from nkqa import actions
 from nkqa import config as config_mod
 from nkqa import workspace as workspace_mod
-from nkqa.models import CATALOGUE, qualify, split_model
+from nkqa.models import CATALOGUE, DEFAULTS, TIERS, qualify, split_model
 from nkqa.shell.commands import REGISTRY, agent_commands
 from nkqa.workspace import Workspace
 
@@ -158,7 +158,7 @@ def test_the_report_reads_the_workspace_it_was_given(ws: Workspace, tmp_path: Pa
 		asyncio.run(actions.models(ch, ws))
 	finally:
 		os.chdir(cwd)
-	assert 'openai:gpt-5.1' in ch.out
+	assert f'openai:{DEFAULTS["openai"]["smart"]}' in ch.out
 
 
 def test_the_agent_cannot_choose_its_own_model() -> None:
@@ -178,6 +178,34 @@ def test_every_offered_model_names_a_tier() -> None:
 	for provider, entries in CATALOGUE.items():
 		tiers = {e['tier'] for e in entries}
 		assert {'smart', 'fast'} <= tiers, f'{provider} cannot fill both tiers'
+
+
+def test_every_default_is_a_model_the_picker_actually_offers() -> None:
+	"""The catalogue shipped `gpt-5.1-mini` as openai's default fast model. The API 404s on it.
+
+	A default is the one entry nobody chooses deliberately, so a wrong one is invisible until
+	every executor and chat call fails. Being "presentation, not validation" excuses a model
+	missing from the list; it does not excuse pointing the default at one that is not in it.
+	"""
+	assert set(DEFAULTS) == set(CATALOGUE), 'every provider needs defaults, and vice versa'
+	for provider, picks in DEFAULTS.items():
+		by_id = {e['id']: e for e in CATALOGUE[provider]}
+		assert set(picks) == set(TIERS), f'{provider} must default both tiers'
+		for tier, model_id in picks.items():
+			assert model_id in by_id, f'{provider} defaults {tier} to "{model_id}", which it does not offer'
+			assert by_id[model_id]['tier'] == tier, (
+				f'{provider}:{model_id} is offered as a {by_id[model_id]["tier"]} model'
+			)
+
+
+def test_the_catalogue_is_well_formed() -> None:
+	for provider, entries in CATALOGUE.items():
+		ids = [e['id'] for e in entries]
+		assert len(ids) == len(set(ids)), f'{provider} lists a model twice'
+		for entry in entries:
+			assert entry['id'] and entry['label'], f'{provider} has an entry missing an id or label'
+			assert entry['tier'] in TIERS, f'{provider}:{entry["id"]} has tier "{entry["tier"]}"'
+			qualify(provider, entry['id'])  # every offered id must survive being written to config.yaml
 
 
 def _write(ws: Workspace, text: str) -> Path:

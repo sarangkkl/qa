@@ -45,6 +45,16 @@ own process environment.
 - **Dismissing an ask is denying.** A closed dialog resolves the ask with `''` server-side.
 - **Frames are dropped when the UI falls behind**, by design. Gaps in the live view are
   expected and not a bug to paper over.
+- **The terminal feed shows every event kind, browser-use's narration included.** Filtering it
+  down to "important" lines defeats the point: it exists so you can tell a slow job from a
+  stuck one, and that judgement needs the boring lines. Collapsed, its header must keep
+  showing the elapsed time and the latest line — that row is the feature, not the expanded view.
+- **The elapsed timer is client-side and must stay that way.** A chat turn is one blocking LLM
+  call that emits nothing until it returns, so a timer driven by incoming events would sit
+  frozen during exactly the wait it exists to explain.
+- **A step screenshot is an artifact path, fetched through `artifactUrl`.** Never put
+  `step.data.screenshot` straight into an `<img src>` — it used to be a raw temp-directory
+  path, which is why the live stage was a black box for so long.
 - **The command list comes from `GET /workspace`**, not from hard-coded names — that is
   what keeps CLI, shell and desktop in step.
 - **The slash grammar lives server-side** in `shell.commands.parse_slash`. The chat box
@@ -65,6 +75,15 @@ own process environment.
 - **A cancelled job must look different from a finished one.** The server sends
   `result.cancelled` and a `cancelled` ack with `ok`; render both, or a failed Stop is
   indistinguishable from a successful one.
+- **`connect` writes a connector; `auth` signs in. Two commands, deliberately.** Sign-in is up
+  to 300s of interactive OAuth, so it runs as a normal job; `connect` writes one config file and
+  is `instant`, which is what lets Settings work mid-run.
+- **Connect only knows a fixed list of connectors, and Jira's name must be `jira`.**
+  `jira_server()` looks the server up by that exact string, so a connector called `atlassian`
+  would render fine and then break file-bug and plan-from-ticket. Anything not on the list stays
+  a hand edit — this path writes a command that config.yaml will later execute.
+- **Never offer `expose_to_executor` as a toggle.** It defaults to false for Jira so the testing
+  agent cannot file bugs on its own; that is a safety property, not a setting.
 - **The model catalogue is a suggestion, not a whitelist.** Settings offers the list from
   `GET /workspace`, but "Other" takes any id and it reaches the provider verbatim. A model
   released after this build must stay reachable without shipping a new build.

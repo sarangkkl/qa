@@ -74,6 +74,9 @@ export default function App() {
 				// A cancelled run leaves its dialog on screen otherwise, and answering it then
 				// goes nowhere: the server no longer holds that ask.
 				setAsk((open) => (open && open.job === job.id ? null : open))
+				// Without this the last JPEG of a finished run stays on the stage forever,
+				// looking live while the header correctly says idle.
+				setFrame(null)
 			},
 			onAsk: setAsk,
 			onFrame: setFrame,
@@ -253,7 +256,15 @@ export default function App() {
 				)}
 			</main>
 
-			<LivePane frame={frame} jobs={jobs} running={running} stopping={stopping} onStop={stop} onForce={force} />
+			<LivePane
+				connection={connection}
+				frame={frame}
+				jobs={jobs}
+				running={running}
+				stopping={stopping}
+				onStop={stop}
+				onForce={force}
+			/>
 
 			{ask && (
 				<AskModal

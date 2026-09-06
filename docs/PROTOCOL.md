@@ -78,7 +78,7 @@ A loopback port is reachable by every browser tab on the machine.
 | `GET /health` | `nkqa` and `browser_use` versions, `workspace`, `busy`, and `roles` — per model role: `model`, `provider`, `missing_keys`. `models_ok` is true when no role is missing a key. This is the "is this workspace ready to run" check. |
 | `GET /workspace` | `app_name`, `base_url`, `headless`, `models` (role → tier or model id), `aliases` (the `smart`/`fast` tiers), `providers` (see below), `appmap` (relative .md paths), `scenarios` (see below), `runs` (newest first), `commands` (see §6). Everything the project shell needs on open. |
 | `GET /scenarios/{id}` | One scenario plus `body`, the raw markdown. `404` if unknown. |
-| `GET /runs/{name}` | `steps`, `result` (the parsed `results.json`, or null), `artifacts` (`report`/`gif`/`history` → artifact URLs), `videos` (artifact URLs). |
+| `GET /runs/{name}` | `steps` (a count), `result` (the parsed `results.json`, or null), `artifacts` (`report`/`gif`/`history` → artifact URLs), `videos`, `shots` (per-step screenshots) and `conversation` (the LLM transcript) — all artifact URLs, in step order. |
 | `GET /chats` | `chats`: id, title, created, updated, turn count — newest first. |
 | `GET /chats/{id}` | One conversation with all its turns. `404` if unknown. |
 | `GET /artifacts/{path}` | A file from inside the workspace. |
@@ -87,8 +87,21 @@ A scenario looks like:
 
 ```json
 {"id": "auth/login", "title": "Login works", "state": "draft",
- "ticket": "", "tags": [], "approved_by": "", "approved_at": "", "last_verdict": ""}
+ "ticket": "", "tags": [], "approved_by": "", "approved_at": "", "last_verdict": "",
+ "last_run": ""}
 ```
+
+`last_run` is the run directory behind `last_verdict`, `""` if the scenario has never run.
+It only ever names a run that wrote a report, so `/artifacts/runs/<last_run>/results.md`
+is fetchable without asking `GET /runs/{name}` first — that is how a client shows the
+result of a run next to the scenario that produced it.
+
+**Evidence is listed as files, never as directories.** `results.md` ends with an `## Evidence`
+list whose links (`videos/`, `conversation/`, `history.json`) are relative paths written for
+someone reading the file on disk; a client that renders them gets links to nowhere, and
+`/artifacts` refuses a directory outright (`safe_artifact` requires a regular file). Use
+`videos`, `shots` and `conversation` from `GET /runs/{name}` instead, and drop the report's own
+Evidence section when rendering rather than showing two — one of them broken.
 
 `state` is `draft` · `ok` · `stale` · `deprecated` — the same four the runner enforces.
 `stale` means the file was edited after approval; render it as a warning, never as
@@ -98,13 +111,19 @@ approved.
 
 ```json
 {"name": "openai", "label": "OpenAI",
- "models": [{"id": "gpt-5.1", "label": "GPT-5.1", "tier": "smart"}]}
+ "models": [{"id": "gpt-5.5", "label": "GPT-5.5", "tier": "smart"}],
+ "defaults": {"smart": "gpt-5.5", "fast": "gpt-5.4-mini"}}
 ```
 
 **It is a catalogue, not a validator.** Any model id reaches the provider verbatim, so this
 list going stale costs a dropdown entry, never a capability — offer a way to type an id that
-is not in it. `tier` says which of the two slots a model is the natural pick for, which is
-what makes "switch provider" fill both in one move.
+is not in it. `tier` says which of the two slots a model is the natural pick for.
+
+`defaults` is what "switch provider" fills both slots with. Use it rather than re-deriving it
+from the order of `models`: the server decides this, and a client that guesses will sooner or
+later disagree with what `qa set-model --provider` does. Every id in `defaults` is guaranteed to
+appear in `models` with a matching `tier` — a default is the one model nobody picks on purpose,
+so a wrong one stays invisible until every call fails.
 
 **Changing the model is `set-model`, not a PUT.** It writes the `smart`/`fast` aliases in
 `config.yaml` — the two tiers every role points at — so one change moves all five roles and
@@ -186,10 +205,26 @@ UI renders rows instead of re-parsing strings. Worth knowing what's in `data`:
 | scenario listing | `scenario`, `state`, `title`, `last_verdict` |
 | run listing | `run`, `when`, `steps` |
 | model roles | `role`, `model`, `provider`, `missing` |
-| a run's steps | `n`, `screenshot`, `url`, `action` |
+| a run's steps | `n`, `screenshot` (an `/artifacts/...` path, see below), `url`, `action` |
 | a verdict | `scenario`, `verdict`, `run` |
 | appmap writes | `appmap` (relative path) |
 | browser-use's own narration | `source: "browser-use"` |
+
+**`step.data.screenshot` is an artifact path, never a filesystem path** — e.g.
+`/artifacts/runs/<run>/steps/step-003.png`. Fetch it the way you fetch any other artifact
+(prefix the host, append the token). browser-use writes step screenshots into a temp
+directory *outside* the workspace, so the run copies each one in and reports where it landed;
+sending the raw path meant the UI got an `<img src>` it could never load and `/artifacts`
+would have refused anyway. A step whose screenshot could not be copied **omits the key**, so
+treat it as optional and fall back to the step text.
+
+**Every long job narrates itself.** `run`, `crawl`, `explore` and `replay` all forward
+browser-use's own logging for the duration of the run as `log` events tagged
+`source: "browser-use"`; `run`, `crawl` and `explore` also screencast. A `say` is the
+exception and emits nothing until its model answers — there is no browser and nothing to
+narrate — so a client should show elapsed time rather than waiting for a frame that is not
+coming. **No credential ever appears in a forwarded line**: the run drops any line containing
+a value held in the session's secrets and substitutes a notice.
 
 **`ask.kind`** — `text` · `secret` · `confirm` · `choice`.
 `body` is long content to show first (a scenario to approve, a bug preview). `options` is
@@ -202,6 +237,11 @@ the value starts with `y`.
 
 **Exit codes** are the CLI's, unchanged: `0` ok, `1` failure or declined, `2` usage or not
 found. CI depends on them, so the UI should too.
+
+**Every job ends in a `result`, including one whose command threw.** An exception used to take
+down the task that sends the frame, so the job sat at `working…` for good — no code, no error,
+nothing to distinguish it from slow. A thrown command now sends `code: 1` plus an `error` field
+carrying `Type: message`, and logs the same line as an event first.
 
 ## 6. Commands come from one registry
 

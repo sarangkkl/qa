@@ -34,6 +34,24 @@ export function stripFrontmatter(source: string): string {
 	return match ? source.slice(match[0].length) : source
 }
 
+/** Drop the report's trailing `## Evidence` list.
+ *
+ * Its links are relative paths written for someone reading results.md on disk. In the app they
+ * point at the app origin and go nowhere, and `videos/` and `conversation/` are directories the
+ * artifact route refuses outright. The Evidence component renders the real thing in its place;
+ * leaving these would mean two Evidence sections, one of them broken.
+ */
+export function stripEvidence(source: string): string {
+	const lines = source.split('\n')
+	const at = lines.findIndex((l) => /^#{2,3}\s+Evidence\s*$/.test(l))
+	if (at < 0) return source
+	// Only the heading and its bullet list go. `qa file-bug` appends a "Filed: PROJ-1" line
+	// after this section, and swallowing that would hide that a bug was already raised.
+	let end = at + 1
+	while (end < lines.length && /^(\s*[-*]\s|\s*$)/.test(lines[end] ?? '')) end += 1
+	return [...lines.slice(0, at), ...lines.slice(end)].join('\n').trimEnd()
+}
+
 export function toHtml(markdown: string): string {
 	const out: string[] = []
 	const lines = markdown.split('\n')

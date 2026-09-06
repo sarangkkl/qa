@@ -64,6 +64,10 @@ class Command:
 	# writing, and never asks: an instant command's channel is not in the pending-ask map,
 	# so a prompt from one could never be answered.
 	instant: bool = False
+	# The chat router normally learns only that a command ran and its exit code - a command's
+	# output never reaches the model. Set this and its text is fed back, so the agent can talk
+	# about what it just read. Only for commands whose output IS the point.
+	feeds_context: bool = False
 
 
 def _remember_scenarios(ctx: ShellContext) -> None:
@@ -135,6 +139,10 @@ async def _correct(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.correct(ctx.ws, ctx.ch, str(a.get('instruction', '')), ctx.config)
 
 
+async def _ticket(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.ticket(ctx.ws, ctx.ch, str(a.get('id', '')), ctx.config)
+
+
 async def _reflect(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.reflect(ctx.ws, ctx.ch, str(a.get('run', '')), ctx.config)
 
@@ -174,6 +182,14 @@ async def _file_bug(ctx: ShellContext, a: dict[str, Any]) -> int:
 
 async def _auth(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.auth(ctx.ws, ctx.ch, str(a.get('server', '')), bool(a.get('reset')), ctx.config)
+
+
+async def _connect(ctx: ShellContext, a: dict[str, Any]) -> int:
+	code = await actions.connect(ctx.ws, ctx.ch, str(a.get('name', '')), str(a.get('project', '')), ctx.config)
+	# Same reason as _set_model: the session holds the config it read when the socket opened,
+	# so without this the server is in the file and invisible to the run that needs it.
+	ctx.config = config_mod.load(ctx.ws.config_file)
+	return code
 
 
 async def _models(ctx: ShellContext, a: dict[str, Any]) -> int:
@@ -351,6 +367,29 @@ ACTION_COMMANDS = [
 			Param('server', 'server name from config.yaml'),
 			Param('reset', 'clear cached logins first', type='boolean', flag=True),
 		],
+	),
+	Command(
+		'ticket',
+		'read a Jira ticket and show it (no scenarios written)',
+		_ticket,
+		[Param('id', 'Jira issue key like PROJ-123, or its browse URL', required=True)],
+		instant=True,  # reads Jira, writes nothing, never asks
+		# Its output is the whole point: without this the agent fetches the ticket, prints it,
+		# and still cannot say a word about what it contains.
+		feeds_context=True,
+	),
+	Command(
+		'connect',
+		'set up a connector in config.yaml (jira), then sign in with /auth',
+		_connect,
+		[
+			Param('name', 'connector to set up, e.g. jira'),
+			Param('project', 'default Jira project key for filing bugs', flag=True),
+		],
+		# It writes a command that config.yaml will later execute, and it decides which external
+		# service the product talks to. Same bar as set-model: a human's call, not the agent's.
+		human_only=True,
+		instant=True,  # one config file, no browser, never asks - so Settings works mid-run
 	),
 	Command('models', 'show model roles, providers, and API key status', _models),
 	Command(

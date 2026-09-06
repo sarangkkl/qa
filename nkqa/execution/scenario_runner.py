@@ -130,14 +130,14 @@ async def _execute(
 		with contextlib.suppress(Exception):
 			active_agent.save_history(run_dir / 'history.json')
 		with contextlib.suppress(Exception):
-			await ch.emit(stream.step_event(active_agent, steps))
+			await ch.emit(stream.step_event(active_agent, steps, run_dir))
 
 	stop.attach(agent)
 
 	result: ScenarioResult | None = None
 	cancelled = False
 	try:
-		async with stream.forward(ch), screencast.stream(agent, ch):
+		async with stream.forward(ch, hitl.secrets), screencast.stream(agent, ch):
 			history = await agent.run(max_steps=config.max_steps, on_step_end=checkpoint)
 		result = history.structured_output
 	except (KeyboardInterrupt, asyncio.CancelledError):

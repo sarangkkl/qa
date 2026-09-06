@@ -33,6 +33,9 @@ qa replay --all                  # replay every recording (no LLM, no browser de
 qa suite [--tag regression]      # run every APPROVED scenario -> one report, CI exit codes
 qa compare                       # what changed between the two newest suite runs
 qa vault                         # credentials this project needs: set? granted? bound to what?
+qa connect jira [--project KEY]  # set Jira up in config.yaml (then: qa auth jira)
+qa ticket PNY-3689               # read a ticket (a browse URL works too) - writes nothing
+qa auth jira                     # OAuth sign-in for a configured connector
 qa file-bug <run> [--step N]     # file a Jira bug from a failed run - always human-confirmed
 qa reflect <run>                 # update the appmap from a past run (automatic after runs)
 qa crawl [--refresh]             # explore the live app read-only; skips pages already mapped
@@ -106,6 +109,16 @@ does not cover something instead of guessing. When it has something wrong, say s
 
 It shows the diff and commits it as `appmap: corrected by you`, so `git revert` undoes a
 correction that came out wrong. Your edit wins over anything the agent learned on its own.
+
+**Setting Jira up:** `qa connect jira --project PROJ` writes the server into `config.yaml`, then
+`qa auth jira` does the OAuth. Both are in the desktop's Settings page too — a **Connect Jira**
+button and **Sign in / check**. Until a connector named exactly `jira` exists, planning from a
+ticket and filing a bug are hidden rather than present-and-broken.
+
+Once it is connected, paste a ticket or its URL into the chat and the agent **reads it before it
+writes anything** — what the ticket asks for, which screens in the app map it touches, and the
+questions a QA would ask about what is ambiguous. Scenarios get drafted once you have answered.
+`qa ticket PNY-3689` is the same read on its own, and writes nothing either way.
 
 Extra tools for the agent come from MCP servers listed in `config.yaml` (`mcp:` section):
 any server's tools can be exposed to the executor (test-data seeders, OTP readers, ...).
