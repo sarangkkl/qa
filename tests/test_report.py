@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+from conftest import FakeChannel
+
 from nkqa import scenarios, workspace
 from nkqa.config import Config
 from nkqa.execution import report
@@ -74,12 +76,12 @@ def test_run_scenario_refuses_unapproved(tmp_path: Path) -> None:
 	ws = workspace.create(tmp_path)
 	hitl = HumanInTheLoop(ws.permissions_file)
 	draft = make_scenario(tmp_path)
-	assert asyncio.run(run_scenario(ws, Config(), hitl, draft)) == 2
+	assert asyncio.run(run_scenario(ws, Config(), hitl, FakeChannel(), draft)) == 2
 
 	approved = make_scenario(tmp_path, approved=True)
 	approved.steps[0].action = 'Tampered.'
 	scenarios.save(approved)
 	stale = scenarios.parse(approved.path, ws.scenarios_dir)
 	assert stale.runnable() == 'stale'
-	assert asyncio.run(run_scenario(ws, Config(), hitl, stale)) == 2
+	assert asyncio.run(run_scenario(ws, Config(), hitl, FakeChannel(), stale)) == 2
 	assert not any(ws.runs_dir.glob('checkout-coupon--*'))  # refusal leaves no run dir

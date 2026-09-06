@@ -29,13 +29,47 @@ qa run checkout/coupon           # execute in a real browser -> per-step verdict
 qa explore https://your-app.com "checkout flow"   # freeform AI-driven testing, no scenario
 qa list                          # all recorded runs
 qa replay <run-name>             # rerun WITHOUT the LLM - free and repeatable
-qa replay --all                  # whole suite (CI mode; exit 0 = all passed)
+qa replay --all                  # replay every recording (no LLM, no browser decisions)
+qa suite [--tag regression]      # run every APPROVED scenario -> one report, CI exit codes
+qa compare                       # what changed between the two newest suite runs
+qa vault                         # credentials this project needs: set? granted? bound to what?
 qa file-bug <run> [--step N]     # file a Jira bug from a failed run - always human-confirmed
 qa reflect <run>                 # update the appmap from a past run (automatic after runs)
 qa crawl                         # optional: explore the live app read-only to enrich the map
 qa revise <id> "<how>"           # rewrite a scenario (invalidates its approval)
 qa models                        # roles -> models -> providers -> are the API keys set?
 ```
+
+### Suites and CI
+
+`qa suite` runs every **approved** scenario, writes one report, and exits the way CI wants
+(0 all passed · 1 something failed · 2 nothing ran). The suite *is* the approved set: a
+draft was never approved, so it is reported as "not in the suite" rather than failed on -
+and `--strict` fails on that too, which is what you want on a build server. A scenario
+edited after approval goes STALE and leaves the suite until someone re-approves it.
+
+Every suite is compared against the previous one, so the report leads with the line that
+matters: **newly failing**. `qa compare` does the same for any two suite runs.
+
+Credentials come from the vault, which is what makes an unattended run possible at all -
+otherwise the first login prompt stops the build. See `.github/workflows/qa-suite.yml.example`.
+
+### Credentials
+
+```
+qa vault                    # what this project needs · what is set · what is granted
+qa vault set <name>         # store one in the OS keychain (prompts; never an argument)
+qa vault grant <name> [--scenario ID]  ·  qa vault revoke <name>
+```
+
+`vault.yaml` is committed and declares the *names*, descriptions and origins - never
+values. Clone the repo, run `qa vault`, and you are told exactly what to supply. Values
+live in your OS keychain, or in `NKQA_SECRET_<NAME>` for CI.
+
+Each credential is bound to an `origin`, and that binding is enforced twice: the value is
+not read out of the keychain while the browser is elsewhere, and browser-use will not type
+it on a non-matching page. A run that gets redirected cannot leak production credentials
+into someone else's form. There is deliberately no `qa vault get`.
 
 ### The interactive session
 
@@ -70,9 +104,13 @@ approval (stale hash). A human approval is always in the loop before a browser m
 
 ```
 config.yaml     # app URL, model roles (planner/executor/reflector/fallback), aliases
+vault.yaml      # credential names, descriptions, origins - never values
 appmap/         # what the agent knows about your app (grows over time)
 scenarios/      # one markdown file per scenario; approval bound to a content hash
+chats/          # conversations, committed: the reasoning behind a scenario is reviewable
 runs/<name>/    # evidence per run: results.md, history.json, videos/, gif, conversation/
+runs/suite--*/  # suite.md + suite.json: one report per suite run, for CI to read
+.nkqa/          # gitignored, machine-local
 ```
 
 ## Development

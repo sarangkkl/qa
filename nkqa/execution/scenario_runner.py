@@ -17,12 +17,15 @@ from browser_use.browser import BrowserProfile
 
 from nkqa import appmap
 from nkqa.config import Config
+from nkqa.execution import screencast, stream
 from nkqa.execution.report import ScenarioResult, write_results
 from nkqa.hitl import HumanInTheLoop
 from nkqa.mcp import MCPRuntime, executor_servers
 from nkqa.models import resolve_llm
 from nkqa.prompts import QA_RULES
 from nkqa.scenarios import Scenario
+from nkqa.stop import StopSignal
+from nkqa.ui import Channel
 from nkqa.workspace import Workspace
 
 REFUSALS = {
@@ -67,34 +70,39 @@ async def run_scenario(
 	ws: Workspace,
 	config: Config,
 	hitl: HumanInTheLoop,
+	ch: Channel,
 	scenario: Scenario,
 	model_override: str | None = None,
+	stop: StopSignal | None = None,
 ) -> int:
 	state = scenario.runnable()
 	if state != 'ok':
-		print(f'⛔ Scenario "{scenario.id}" {REFUSALS[state].format(id=scenario.id)}')
+		await ch.log(f'⛔ Scenario "{scenario.id}" {REFUSALS[state].format(id=scenario.id)}')
 		return 2
 
+	hitl.scenario_id = scenario.id  # vault grants can be scoped to one scenario
 	run_dir = ws.runs_dir / f'{scenario.id.replace("/", "-")}--{datetime.now():%Y%m%d-%H%M%S}'
 	run_dir.mkdir(parents=True, exist_ok=True)
-	print(f'▶️  Running scenario "{scenario.title}" ({len(scenario.steps)} steps). 🎬 Recording video.\n')
+	await ch.log(f'▶️  Running scenario "{scenario.title}" ({len(scenario.steps)} steps). 🎬 Recording video.\n')
 
 	tools = hitl.build_tools()
 	async with MCPRuntime(executor_servers(config)) as mcp_runtime:
 		extra_tools = await mcp_runtime.register_executor_tools(tools)
 		if extra_tools:
-			print(f'🔧 Extra tools from MCP: {", ".join(extra_tools)}')
-		return await _execute(ws, config, hitl, scenario, run_dir, tools, model_override)
+			await ch.log(f'🔧 Extra tools from MCP: {", ".join(extra_tools)}')
+		return await _execute(ws, config, hitl, ch, scenario, run_dir, tools, model_override, stop or StopSignal())
 
 
 async def _execute(
 	ws: Workspace,
 	config: Config,
 	hitl: HumanInTheLoop,
+	ch: Channel,
 	scenario: Scenario,
 	run_dir: 'Path',
 	tools: 'Tools[None]',
 	model_override: str | None,
+	stop: StopSignal,
 ) -> int:
 	agent: Agent[None, ScenarioResult] = Agent(
 		task=build_task(scenario, config.base_url, appmap.context_for_run(ws)),
@@ -108,32 +116,52 @@ async def _execute(
 		save_conversation_path=run_dir / 'conversation',
 		calculate_cost=True,
 		file_system_path=str(run_dir),
+		# nkqa owns SIGINT/SIGTERM in every surface; see nkqa/stop.py.
+		enable_signal_handler=False,
+		register_should_stop_callback=stop.should_stop,
 		output_model_schema=ScenarioResult,
 	)
 
+	steps = 0
+
 	async def checkpoint(active_agent: Agent[None, ScenarioResult]) -> None:
+		nonlocal steps
+		steps += 1
 		with contextlib.suppress(Exception):
 			active_agent.save_history(run_dir / 'history.json')
+		with contextlib.suppress(Exception):
+			await ch.emit(stream.step_event(active_agent, steps))
+
+	stop.attach(agent)
 
 	result: ScenarioResult | None = None
+	cancelled = False
 	try:
-		history = await agent.run(max_steps=config.max_steps, on_step_end=checkpoint)
+		async with stream.forward(ch), screencast.stream(agent, ch):
+			history = await agent.run(max_steps=config.max_steps, on_step_end=checkpoint)
 		result = history.structured_output
 	except (KeyboardInterrupt, asyncio.CancelledError):
-		print('\n🛑 Run interrupted - partial evidence is kept; unreached steps count as blocked.')
+		cancelled = True
+		await ch.log('\n🛑 Run interrupted - partial evidence is kept; unreached steps count as blocked.')
 	except Exception as e:
-		print(f'\n💥 Run crashed ({type(e).__name__}: {e}) - evidence kept; result is blocked.')
+		await ch.log(f'\n💥 Run crashed ({type(e).__name__}: {e}) - evidence kept; result is blocked.')
 	finally:
 		if agent.history.history:
 			agent.save_history(run_dir / 'history.json')
 
 	verdict = write_results(run_dir, scenario, result)
 	icon = {'pass': '✅', 'fail': '❌', 'blocked': '🚧'}[verdict]
-	print(f'\n{icon} {scenario.id}: {verdict.upper()}')
-	print(f'📄 Report:   {run_dir / "results.md"}')
-	print(f'▶️  Replay:   qa replay {run_dir.name}')
+	await ch.verdict(
+		f'\n{icon} {scenario.id}: {verdict.upper()}', scenario=scenario.id, verdict=verdict, run=run_dir.name
+	)
+	await ch.artifact(f'📄 Report:   {run_dir / "results.md"}', report=str(run_dir / 'results.md'))
+	await ch.log(f'▶️  Replay:   qa replay {run_dir.name}')
 
-	from nkqa.reflector import auto_reflect
+	# A stopped run does not teach the appmap: reflection is a fresh LLM call, and half a
+	# run is a misleading thing to learn from. write_results above still ran - the verdict
+	# and the exit code are not optional.
+	if not (cancelled or stop.stopped):
+		from nkqa.reflector import auto_reflect
 
-	await auto_reflect(ws, config, run_dir)
+		await auto_reflect(ws, config, ch, run_dir)
 	return 0 if verdict == 'pass' else 1

@@ -9,6 +9,9 @@ from nkqa import workspace as workspace_mod
 from nkqa.hitl import HumanInTheLoop
 from nkqa.shell import render
 from nkqa.shell.commands import REGISTRY, ShellContext, parse_slash
+from nkqa.stop import interruptible
+from nkqa.ui import TerminalChannel
+from nkqa.vault import Vault
 
 PROMPT = 'qa> '
 HISTORY_FILE = '.qa_history'
@@ -45,7 +48,7 @@ async def handle(ctx: ShellContext, line: str) -> int:
 	if line.startswith('/'):
 		cmd, args, error = parse_slash(line)
 		if cmd is None:
-			print(error)
+			await ctx.ch.log(error)
 			return 2
 		return await cmd.handler(ctx, args)
 
@@ -59,7 +62,15 @@ async def start() -> int:
 	if ws is None:
 		print('Not inside a QA workspace. Create one first:  qa init')
 		return 2
-	ctx = ShellContext(ws=ws, config=config_mod.load(ws.config_file), hitl=HumanInTheLoop(ws.permissions_file))
+	channel = TerminalChannel()
+	ctx = ShellContext(
+		ws=ws,
+		config=config_mod.load(ws.config_file),
+		# Same as the sidecar: no vault means every stored credential silently falls through
+		# to "type it again", because `_from_vault` returns early when it is None.
+		hitl=HumanInTheLoop(ws.permissions_file, channel, Vault(ws)),
+		channel=channel,
+	)
 	readline_mod = setup_readline(ctx)
 	print(render.banner(ws, ctx.config))
 
@@ -74,7 +85,8 @@ async def start() -> int:
 		if not line:
 			continue
 		try:
-			await handle(ctx, line)
+			# Ctrl+C during a run stops the run, not the session.
+			await interruptible(handle(ctx, line), ctx.stop)
 		except KeyboardInterrupt:
 			print(render.paint('\n⏹  cancelled - evidence for anything that ran is saved.', 'yellow'))
 		except Exception as e:  # a bad command must never kill the session

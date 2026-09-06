@@ -9,7 +9,9 @@ from typing import Any
 from browser_use.llm.messages import AssistantMessage, BaseMessage, SystemMessage, UserMessage
 from pydantic import BaseModel, Field
 
+from nkqa import chats as chats_mod
 from nkqa import scenarios as scenarios_mod
+from nkqa.chats import Turn
 from nkqa.models import resolve_llm
 from nkqa.shell.commands import REGISTRY, Command, ShellContext, agent_commands
 from nkqa.shell.render import paint
@@ -48,6 +50,27 @@ def describe_commands() -> str:
 	return '\n'.join(lines)
 
 
+def replay_history(ctx: ShellContext) -> list[BaseMessage]:
+	"""Earlier turns, capped: a long chat must not become a long prompt every message."""
+	if ctx.chat is None:
+		return []
+	messages: list[BaseMessage] = []
+	for turn in ctx.chat.recent():
+		if turn.role == 'user':
+			messages.append(UserMessage(content=turn.text))
+		elif turn.role == 'assistant':
+			ran = f' (ran {turn.command} -> exit {turn.exit})' if turn.command else ''
+			messages.append(AssistantMessage(content=turn.text + ran))
+	return messages
+
+
+def record(ctx: ShellContext, turn: Turn) -> None:
+	if ctx.chat is None:
+		return
+	ctx.chat.add(turn)
+	chats_mod.save(ctx.ws, ctx.chat)
+
+
 def describe_state(ctx: ShellContext) -> str:
 	scenarios = scenarios_mod.load_all(ctx.ws.scenarios_dir)
 	if scenarios:
@@ -80,32 +103,40 @@ def coerce(cmd: Command, args: dict[str, str]) -> dict[str, Any]:
 async def route(ctx: ShellContext, text: str) -> int:
 	llm = resolve_llm(ctx.config, 'chat')
 	if llm is None:
-		print("Chat needs a model: set models.chat in config.yaml (e.g. 'fast'), or use /commands.")
+		await ctx.ch.log("Chat needs a model: set models.chat in config.yaml (e.g. 'fast'), or use /commands.")
 		return 2
 
+	history = replay_history(ctx)
+	record(ctx, Turn(role='user', text=text))
 	messages: list[BaseMessage] = [
 		SystemMessage(content=f'{CHAT_SYSTEM}\nCommands you may call:\n{describe_commands()}'),
+		*history,
 		UserMessage(content=f'Current state:\n{describe_state(ctx)}\n\nThe human says: {text}'),
 	]
 	last_code = 0
 	for _ in range(MAX_STEPS):
 		decision = (await llm.ainvoke(messages, output_format=ChatDecision)).completion
 		if decision.reply:
-			print(paint(f'\n{decision.reply}\n', 'cyan'))
+			await ctx.ch.log(paint(f'\n{decision.reply}\n', 'cyan'))
 		name = decision.command.strip().lstrip('/')
 		if not name:
+			record(ctx, Turn(role='assistant', text=decision.reply))
 			return last_code
 
 		cmd = REGISTRY.get(name)
 		if cmd is None or cmd.shell_only:
-			print(f'(no such command "{name}" - type /help)')
+			await ctx.ch.log(f'(no such command "{name}" - type /help)')
+			record(ctx, Turn(role='assistant', text=f'(no such command "{name}")'))
 			return 2
 		if cmd.human_only:
 			target = decision.args.get('id', '<id>')
-			print(paint(f'Approving is yours to do: type  /approve {target}', 'yellow'))
+			refusal = f'Approving is yours to do: type  /approve {target}'
+			await ctx.ch.log(paint(refusal, 'yellow'))
+			record(ctx, Turn(role='assistant', text=refusal))
 			return 1
 
 		last_code = await cmd.handler(ctx, coerce(cmd, decision.args))
+		record(ctx, Turn(role='assistant', text=decision.reply, command=name, args=decision.args, exit=last_code))
 		messages.append(AssistantMessage(content=f'ran {name} -> exit {last_code}'))
 		messages.append(
 			UserMessage(content=f'`{name}` finished with exit code {last_code}. Anything else needed for the request?')

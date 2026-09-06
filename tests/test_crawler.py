@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+from conftest import FakeChannel
+
 from nkqa import crawler, workspace
 from nkqa.config import Config
 from nkqa.hitl import HumanInTheLoop
@@ -18,5 +20,5 @@ def test_build_task(tmp_path: Path) -> None:
 def test_crawl_requires_base_url(tmp_path: Path) -> None:
 	ws = workspace.create(tmp_path)
 	hitl = HumanInTheLoop(ws.permissions_file)
-	assert asyncio.run(crawler.crawl(ws, Config(base_url=''), hitl, 5)) == 2
+	assert asyncio.run(crawler.crawl(ws, Config(base_url=''), hitl, FakeChannel(), 5)) == 2
 	assert not any(ws.runs_dir.glob('crawl--*'))

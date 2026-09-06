@@ -14,6 +14,7 @@ from nkqa import config as config_mod
 from nkqa.execution.evidence import list_runs, recorded_runs
 from nkqa.hitl import HumanInTheLoop
 from nkqa.models import resolve_llm
+from nkqa.ui import Channel
 from nkqa.workspace import Workspace, slugify
 
 
@@ -24,13 +25,13 @@ async def _collect_replay_secrets(hitl: HumanInTheLoop, history_file: Path) -> N
 		await hitl.collect_secret(key, f'🔑 The recording uses "{key}". Enter it for this replay: ')
 
 
-def resolve_history_file(ws: Workspace, name_or_path: str) -> Path | None:
+async def resolve_history_file(ws: Workspace, ch: Channel, name_or_path: str) -> Path | None:
 	"""Accept a run name, a run dir, or a direct path to a history.json."""
 	if not name_or_path:
 		runs = recorded_runs(ws.runs_dir)
 		if len(runs) == 1:
 			return runs[0] / 'history.json'
-		list_runs(ws.runs_dir)
+		await list_runs(ch, ws.runs_dir)
 		return None
 	candidates = [
 		ws.runs_dir / name_or_path / 'history.json',  # exact run-dir name (timestamped scenario runs)
@@ -41,8 +42,8 @@ def resolve_history_file(ws: Workspace, name_or_path: str) -> Path | None:
 	for c in candidates:
 		if c.is_file():
 			return c
-	print(f'No recording found for "{name_or_path}".')
-	list_runs(ws.runs_dir)
+	await ch.log(f'No recording found for "{name_or_path}".')
+	await list_runs(ch, ws.runs_dir)
 	return None
 
 
@@ -54,11 +55,11 @@ def parse_vars(var_pairs: list[str]) -> dict[str, str]:
 	return variables
 
 
-async def replay(ws: Workspace, hitl: HumanInTheLoop, history_file: Path, var_pairs: list[str]) -> int:
+async def replay(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, history_file: Path, var_pairs: list[str]) -> int:
 	variables = parse_vars(var_pairs)
 	run_dir = history_file.parent
 	await _collect_replay_secrets(hitl, history_file)
-	print(f'\n▶️  Replaying {run_dir.name}' + (f' with overrides {list(variables)}' if variables else ''))
+	await ch.log(f'\n▶️  Replaying {run_dir.name}' + (f' with overrides {list(variables)}' if variables else ''))
 
 	from nkqa.execution.report import ScenarioResult
 
@@ -76,32 +77,39 @@ async def replay(ws: Workspace, hitl: HumanInTheLoop, history_file: Path, var_pa
 		browser_profile=BrowserProfile(headless=False, record_video_dir=run_dir / 'videos'),
 		file_system_path=str(run_dir),
 	)
-	results = await agent.load_and_rerun(history_file, variables=variables or None, skip_failures=True)
+	from nkqa.execution import stream
+
+	async with stream.forward(ch):
+		results = await agent.load_and_rerun(history_file, variables=variables or None, skip_failures=True)
 
 	failed = 0
-	print(f'\n=== REPLAY REPORT: {run_dir.name} ===')
+	await ch.log(f'\n=== REPLAY REPORT: {run_dir.name} ===')
 	for i, r in enumerate(results, start=1):
 		if r.error:
 			failed += 1
-			print(f'step {i:>2}: ❌ {r.error.splitlines()[0][:120]}')
+			await ch.step(f'step {i:>2}: ❌ {r.error.splitlines()[0][:120]}', n=i, ok=False)
 		else:
 			summary = (r.extracted_content or 'ok').splitlines()[0][:120]
-			print(f'step {i:>2}: ✅ {summary}')
-	print(f'\nVerdict: {"PASS" if failed == 0 else f"FAIL ({failed} step(s) failed)"}')
+			await ch.step(f'step {i:>2}: ✅ {summary}', n=i, ok=True)
+	await ch.verdict(
+		f'\nVerdict: {"PASS" if failed == 0 else f"FAIL ({failed} step(s) failed)"}',
+		run=run_dir.name,
+		verdict='pass' if failed == 0 else 'fail',
+	)
 	return 0 if failed == 0 else 1
 
 
-async def replay_all(ws: Workspace, hitl: HumanInTheLoop, var_pairs: list[str]) -> int:
+async def replay_all(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, var_pairs: list[str]) -> int:
 	runs = recorded_runs(ws.runs_dir)
 	if not runs:
-		print('No recorded tests yet. Record one: qa run <url>')
+		await ch.log('No recorded tests yet. Record one: qa run <url>')
 		return 2
 	verdicts: dict[str, int] = {}
 	for d in runs:
-		verdicts[d.name] = await replay(ws, hitl, d / 'history.json', var_pairs)
-	print('\n=== SUITE SUMMARY ===')
+		verdicts[d.name] = await replay(ws, hitl, ch, d / 'history.json', var_pairs)
+	await ch.log('\n=== SUITE SUMMARY ===')
 	for name, code in verdicts.items():
-		print(f'  {"✅ PASS" if code == 0 else "❌ FAIL"}  {name}')
+		await ch.log(f'  {"✅ PASS" if code == 0 else "❌ FAIL"}  {name}')
 	failed = sum(1 for c in verdicts.values() if c != 0)
-	print(f'\n{len(verdicts) - failed}/{len(verdicts)} tests passed')
+	await ch.log(f'\n{len(verdicts) - failed}/{len(verdicts)} tests passed')
 	return 0 if failed == 0 else 1

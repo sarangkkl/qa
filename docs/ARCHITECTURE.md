@@ -95,6 +95,32 @@ The executor keeps the prototype's human-in-the-loop tools unchanged:
 - `request_permission` — dangerous/irreversible actions gated by
   allow-once / session / always / deny (persisted grants in the workspace)
 
+**Session autonomy** (`/mode ask | allow | refuse`) sets how that gate answers itself for
+one session: stop and ask every time (the default), grant automatically, or refuse
+automatically. It is session-scoped and never persisted — there is no config.yaml key, so a
+workspace can never be born permissive — and it is `human_only`, so the agent cannot widen
+its own autonomy. `refuse` outranks even a stored always-grant; the conservative answer
+wins. It does not touch credentials, which keep their own human grant and origin binding,
+and `approve` stays human-only in every mode. **It is not a sandbox**: it governs the
+actions the agent itself declares risky, not what a browser is physically able to do.
+
+### Stopping a run
+
+`nkqa` owns SIGINT and SIGTERM in every surface: every `Agent` is constructed with
+`enable_signal_handler=False`, because browser-use's own handler *pauses* the agent rather
+than stopping it, and nothing ever resumes that pause. `nkqa/stop.py` is the whole mechanism:
+
+- `StopSignal` is per session, lives on `ShellContext` (not on `HumanInTheLoop` - that object
+  is the security surface and stays about secrets), and is handed to the runner, which
+  `attach`es its `Agent`. It is passed to browser-use as `register_should_stop_callback`.
+- Stopping fires both halves: tell the agent, then cancel the task. It also switches the
+  summary GIF off, because browser-use encodes it synchronously on the way out.
+- A stopped run keeps its evidence and its verdict but does **not** reflect into the appmap.
+- `interruptible()` defines Ctrl+C for the CLI and the shell: first stops the run and keeps
+  the evidence, second leaves immediately.
+- The desktop adds one tier above this: killing the sidecar outright. That always works, and
+  costs the session's credentials, any pending prompt, and the run's video.
+
 ## 5. Knowledge & learning ("the QA notebook")
 
 **No AI/vector database.** Learned knowledge is plain files in git — auditable,
@@ -192,6 +218,9 @@ qa explore [url] [focus]   # freeform AI-driven testing, no scenario
 qa replay <run> [--all]    # deterministic re-run from history, no LLM
 qa reflect <run>           # appmap learns from a run (automatic after every run)
 qa crawl [--pages N]       # optional read-only exploration to enrich the appmap
+qa suite [--tag T] [--strict]           # run every approved scenario -> one CI report
+qa compare [a] [b]                      # what changed between two suite runs
+qa vault [status|set|rm|grant|revoke]   # stored credentials and their grants
 qa list / qa models        # recorded runs · model roles, providers, key presence
 qa file-bug <run> [--step N]            # push a finding to Jira with repro + evidence
 ```
@@ -210,10 +239,41 @@ qa file-bug <run> [--step N]            # push a finding to Jira with repro + ev
 5. **Interactive shell** — `qa` with no arguments opens a Claude-Code-style session:
    slash commands + natural language over the commands above. *The product's face.*
    The chat agent can never approve — that stays a human keystroke.
-6. **Suite & CI polish** — tag suites, `run --all` regression mode on the replay
-   machinery, run-over-run comparison, stuck-escalation, selector auto-healing.
+6. **Suite & CI polish** — tag suites, run-over-run comparison, stuck-escalation,
+   selector auto-healing. *Shipped: `qa suite`, `qa compare`, and the vault that makes an
+   unattended run possible. Stuck-escalation and selector auto-healing remain open, and
+   deliberately so — both need a signal only real runs can provide (§6).*
 
-## 10. Non-goals for v1
+## 10. The UI channel (added for the desktop track)
+
+Nothing below the front-ends prints or reads stdin. Every verb is handed a
+`Channel` (`nkqa/ui.py`) and talks through it:
+
+```python
+class Channel(ABC):
+	async def emit(self, event: Event) -> None: ...   # log | step | verdict | artifact | progress | done
+	async def ask(self, request: Ask) -> str: ...     # text | secret | confirm | choice
+```
+
+`TerminalChannel` is the CLI: events print, asks read stdin, and the shipped output is
+unchanged byte for byte. The desktop sidecar passes a channel that puts the same events
+on a WebSocket and resolves `ask` from the UI. `cli.py` and `shell/session.py` are the
+only modules that may still call `print` - they *are* the terminal surface.
+
+Two consequences worth knowing:
+- `Ask.interrupt` marks a prompt raised from inside a running job (the HITL tools). The
+  terminal frames it with rules so it is visible in a wall of browser-use logs; a GUI
+  renders it as a modal.
+- A collected secret goes straight into `HumanInTheLoop.secrets` and is never put back
+  into an Event. The channel carries the prompt, never the answer - `tests/test_ui.py`
+  asserts it.
+
+`execution/stream.py` forwards browser-use's own `logging` output and bare prints onto
+the channel during a run, and turns each finished step into a step Event carrying the
+screenshot path. Both are no-ops for `TerminalChannel`, where browser-use is already
+writing to the same terminal.
+
+## 11. Non-goals for v1
 
 - Web dashboard / hosted SaaS (validate the workflow first)
 - Cloud browser farm / parallel remote execution

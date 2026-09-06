@@ -98,6 +98,13 @@ def read_results(run_dir: Path) -> RunRecord | None:
 	return RunRecord.model_validate_json(f.read_text(encoding='utf-8'))
 
 
+def latest_run_dir(runs_dir: Path, scenario_id: str) -> Path | None:
+	"""Newest run dir for a scenario, by the results.md it wrote."""
+	slug = scenario_id.replace('/', '-')
+	candidates = sorted(runs_dir.glob(f'{slug}--*/results.md'), key=lambda p: p.stat().st_mtime)
+	return candidates[-1].parent if candidates else None
+
+
 def last_verdict(runs_dir: Path, scenario_id: str) -> str:
 	"""Latest verdict for a scenario ('PASS'/'FAIL'/'BLOCKED'), '' if never run."""
 	slug = scenario_id.replace('/', '-')

@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -138,17 +138,37 @@ def test_agent_coerces_arg_types() -> None:
 def test_registry_covers_the_cli_surface() -> None:
 	from nkqa.cli import build_parser
 
-	cli_commands = set(build_parser()._subparsers._group_actions[0].choices)  # type: ignore[union-attr]
+	parser = build_parser()
+	cli_commands = set(parser._subparsers._group_actions[0].choices)  # type: ignore[union-attr]
 	shell_only = {'help', 'exit', 'forget'}
 	cli_only = {'init', 'version', 'chat'}
-	assert set(REGISTRY) - shell_only == cli_commands - cli_only
+	# A per-session stance has no meaning in a one-shot `qa <cmd>` process, which exits before
+	# it could matter. The bar for adding to this set is that high - if a command could
+	# sensibly be typed at a terminal, it belongs in the CLI too.
+	session_only = {'mode'}
+	# the vault sub-actions are one CLI subcommand (`qa vault set`), several registry entries
+	vault_subcommands = {name for name in REGISTRY if name.startswith('vault-')}
+	assert set(REGISTRY) - shell_only - session_only - vault_subcommands == cli_commands - cli_only
+
+	vault_parser = cast(Any, parser._subparsers)._group_actions[0].choices['vault']  # type: ignore[union-attr]
+	actions_arg = next(a for a in cast(list[Any], vault_parser._actions) if a.dest == 'action')
+	assert {f'vault-{name}' for name in actions_arg.choices if name != 'status'} <= vault_subcommands
+
+
+def test_vault_commands_are_human_only() -> None:
+	"""Storing, granting and revoking a credential is a human keystroke, like approving."""
+	agent_names = {c.name for c in agent_commands()}
+	for name in ('vault-set', 'vault-rm', 'vault-grant', 'vault-revoke'):
+		assert REGISTRY[name].human_only is True
+		assert name not in agent_names
+	assert 'vault' in agent_names  # read-only status is fine for the agent to run
 
 
 def test_auth_guards(tmp_path: Path) -> None:
 	ctx = make_ctx(tmp_path)
-	assert asyncio.run(actions.auth(ctx.ws, config=ctx.config)) == 2  # nothing configured
+	assert asyncio.run(actions.auth(ctx.ws, ctx.ch, config=ctx.config)) == 2  # nothing configured
 
 	from nkqa.config import MCPServer
 
 	ctx.config.mcp_servers = [MCPServer(name='jira', command='npx')]
-	assert asyncio.run(actions.auth(ctx.ws, 'nope', config=ctx.config)) == 2  # unknown server
+	assert asyncio.run(actions.auth(ctx.ws, ctx.ch, 'nope', config=ctx.config)) == 2  # unknown server

@@ -20,6 +20,8 @@ from nkqa.config import Config
 from nkqa.hitl import HumanInTheLoop
 from nkqa.models import resolve_llm
 from nkqa.prompts import QA_RULES
+from nkqa.stop import StopSignal
+from nkqa.ui import Channel, Event
 from nkqa.workspace import Workspace
 
 CRAWL_RULES = """
@@ -45,14 +47,21 @@ def build_task(config: Config, current_appmap: dict[str, str], pages: int) -> st
 
 
 async def crawl(
-	ws: Workspace, config: Config, hitl: HumanInTheLoop, pages: int, model_override: str | None = None
+	ws: Workspace,
+	config: Config,
+	hitl: HumanInTheLoop,
+	ch: Channel,
+	pages: int,
+	model_override: str | None = None,
+	stop: StopSignal | None = None,
 ) -> int:
 	if not config.base_url:
-		print('qa crawl needs app.base_url in config.yaml.')
+		await ch.log('qa crawl needs app.base_url in config.yaml.')
 		return 2
+	stop = stop or StopSignal()
 	run_dir = ws.runs_dir / f'crawl--{datetime.now():%Y%m%d-%H%M%S}'
 	run_dir.mkdir(parents=True, exist_ok=True)
-	print(f'🕷️  Mapping {config.base_url} (budget: {pages} pages, read-only). 🎬 Recording video.\n')
+	await ch.log(f'🕷️  Mapping {config.base_url} (budget: {pages} pages, read-only). 🎬 Recording video.\n')
 
 	agent: Agent[None, AppmapUpdate] = Agent(
 		task=build_task(config, appmap.read_all(ws), pages),
@@ -62,36 +71,46 @@ async def crawl(
 		sensitive_data=hitl.secrets,
 		fallback_llm=resolve_llm(config, 'fallback'),
 		browser_profile=BrowserProfile(headless=config.headless, record_video_dir=run_dir / 'videos'),
+		# nkqa owns SIGINT/SIGTERM in every surface; see nkqa/stop.py.
+		enable_signal_handler=False,
+		register_should_stop_callback=stop.should_stop,
 		generate_gif=str(run_dir / 'last_run.gif'),
 		save_conversation_path=run_dir / 'conversation',
 		calculate_cost=True,
 		file_system_path=str(run_dir),
 		output_model_schema=AppmapUpdate,
 	)
+	stop.attach(agent)
 
 	async def checkpoint(active_agent: Agent[None, AppmapUpdate]) -> None:
 		with contextlib.suppress(Exception):
 			active_agent.save_history(run_dir / 'history.json')
 
 	update: AppmapUpdate | None = None
+	cancelled = False
 	try:
 		history = await agent.run(max_steps=max(config.max_steps, pages * 4), on_step_end=checkpoint)
 		update = history.structured_output
 	except (KeyboardInterrupt, asyncio.CancelledError):
-		print('\n🛑 Crawl interrupted - evidence kept.')
+		cancelled = True
+		await ch.log('\n🛑 Crawl interrupted - evidence kept.')
 	except Exception as e:
-		print(f'\n💥 Crawl crashed ({type(e).__name__}: {e}) - evidence kept.')
+		await ch.log(f'\n💥 Crawl crashed ({type(e).__name__}: {e}) - evidence kept.')
 	finally:
 		if agent.history.history:
 			agent.save_history(run_dir / 'history.json')
 
+	if cancelled or stop.stopped:
+		# Distinct from "the model gave us nothing": you stopped it, and that is not a fault.
+		await ch.log(f'\n⏹  Stopped - the partial recording is in {run_dir}')
+		return 1
 	if update is None:
-		print('\n🚧 The crawl returned no structured appmap update; nothing written.')
+		await ch.log('\n🚧 The crawl returned no structured appmap update; nothing written.')
 		return 1
 	written = appmap.apply(ws, update, f'appmap: crawl {run_dir.name}')
 	for f in written:
-		print(f'🗺️  appmap/{f}')
+		await ch.emit(Event('artifact', f'🗺️  appmap/{f}', {'appmap': f}))
 	if update.notes:
-		print(f'\n🗒️  Crawl notes: {update.notes}')
-	print(f'\n📄 Evidence: {run_dir}/  ·  Review:  git diff appmap/')
+		await ch.log(f'\n🗒️  Crawl notes: {update.notes}')
+	await ch.log(f'\n📄 Evidence: {run_dir}/  ·  Review:  git diff appmap/')
 	return 0

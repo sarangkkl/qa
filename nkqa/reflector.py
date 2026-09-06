@@ -14,6 +14,7 @@ from nkqa import appmap
 from nkqa.appmap import AppmapUpdate
 from nkqa.config import Config
 from nkqa.models import resolve_llm
+from nkqa.ui import Channel
 from nkqa.workspace import Workspace
 
 REFLECT_SYSTEM = """\
@@ -73,7 +74,7 @@ def _messages(ws: Workspace, facts: str) -> list[BaseMessage]:
 	]
 
 
-async def reflect(ws: Workspace, config: Config, run_dir: Path) -> list[str]:
+async def reflect(ws: Workspace, config: Config, ch: Channel, run_dir: Path) -> list[str]:
 	"""Reflect on one run; returns written appmap files. Raises on real errors (qa reflect surfaces them)."""
 	llm = resolve_llm(config, 'reflector')
 	if llm is None:
@@ -83,17 +84,17 @@ async def reflect(ws: Workspace, config: Config, run_dir: Path) -> list[str]:
 	update = response.completion
 	written = appmap.apply(ws, update, f'appmap: learned from {run_dir.name}')
 	if update.notes:
-		print(f'🗒️  Reflection notes: {update.notes}')
+		await ch.log(f'🗒️  Reflection notes: {update.notes}')
 	return written
 
 
-async def auto_reflect(ws: Workspace, config: Config, run_dir: Path) -> None:
+async def auto_reflect(ws: Workspace, config: Config, ch: Channel, run_dir: Path) -> None:
 	"""Post-run hook. Never raises; a reflection failure must not touch the run's outcome."""
 	if not config.auto_reflect:
 		return
 	try:
-		written = await reflect(ws, config, run_dir)
+		written = await reflect(ws, config, ch, run_dir)
 		if written:
-			print(f'🧠 appmap updated from this run: {", ".join(written)}')
+			await ch.log(f'🧠 appmap updated from this run: {", ".join(written)}')
 	except Exception as e:
-		print(f'⚠️  Reflection skipped ({type(e).__name__}: {str(e)[:120]})')
+		await ch.log(f'⚠️  Reflection skipped ({type(e).__name__}: {str(e)[:120]})')

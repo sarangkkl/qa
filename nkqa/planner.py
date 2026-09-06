@@ -11,6 +11,7 @@ from nkqa.config import Config
 from nkqa.execution.report import last_verdict
 from nkqa.models import resolve_llm
 from nkqa.scenarios import Scenario, Step
+from nkqa.ui import Channel, Event
 from nkqa.workspace import Workspace, slugify
 
 
@@ -89,10 +90,12 @@ def write_drafts(
 	return written, skipped
 
 
-async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: bool = False, ticket: str = '') -> int:
+async def plan(
+	ws: Workspace, config: Config, ch: Channel, ask: str, area: str = '', force: bool = False, ticket: str = ''
+) -> int:
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
-		print("The planner needs a real model: set models.planner in config.yaml (e.g. 'smart').")
+		await ch.log("The planner needs a real model: set models.planner in config.yaml (e.g. 'smart').")
 		return 2
 
 	from browser_use.llm.messages import SystemMessage, UserMessage
@@ -103,7 +106,7 @@ async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: b
 		from nkqa.mcp import MCPRuntime
 
 		spec = jira_server(config)
-		print(f'🎫 Fetching {ticket} via MCP server "{spec.name}"...')
+		await ch.log(f'🎫 Fetching {ticket} via MCP server "{spec.name}"...')
 		async with MCPRuntime([spec]) as rt:
 			ticket_section = f'\n\n### Ticket {ticket}\n{await fetch_issue(rt, spec, ticket)}'
 		ask = ask or f"verify that ticket {ticket}'s acceptance criteria are met"
@@ -111,7 +114,7 @@ async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: b
 	prompt = gather_context(ws, config) + ticket_section + f'\n\n### Ask\n{ask}'
 	if area:
 		prompt += f'\nPut all scenarios under the area "{slugify(area)}".'
-	print(f'🧠 Planning with {config.models.get("planner")} (no browser - knowledge only)...')
+	await ch.log(f'🧠 Planning with {config.models.get("planner")} (no browser - knowledge only)...')
 	response = await llm.ainvoke(
 		[SystemMessage(content=PLANNER_SYSTEM), UserMessage(content=prompt)], output_format=PlanOutput
 	)
@@ -119,13 +122,13 @@ async def plan(ws: Workspace, config: Config, ask: str, area: str = '', force: b
 
 	written, skipped = write_drafts(ws, output.scenarios, force, ticket)
 	for s in written:
-		print(f'📝 draft  {s.id}  ({len(s.steps)} steps) - {s.title}')
+		await ch.emit(Event('log', f'📝 draft  {s.id}  ({len(s.steps)} steps) - {s.title}', {'scenario': s.id}))
 	for sid in skipped:
-		print(f'⏭️  kept existing {sid} (use --force to overwrite)')
+		await ch.log(f'⏭️  kept existing {sid} (use --force to overwrite)')
 	if output.notes:
-		print(f'\n🗒️  Planner notes: {output.notes}')
+		await ch.log(f'\n🗒️  Planner notes: {output.notes}')
 	if written:
-		print(f'\nReview the files under {ws.scenarios_dir}/, edit freely, then:  qa approve <id>')
+		await ch.log(f'\nReview the files under {ws.scenarios_dir}/, edit freely, then:  qa approve <id>')
 	else:
-		print('\nNothing new to draft.')
+		await ch.log('\nNothing new to draft.')
 	return 0

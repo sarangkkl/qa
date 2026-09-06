@@ -1,5 +1,6 @@
 """config.yaml loading. Missing file or keys fall back to prototype-equivalent defaults."""
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,22 @@ appmap:
 # jira:
 #   project: PROJ   # default project key for `qa file-bug`
 """
+
+
+def render_template(app_name: str = '', base_url: str = '') -> str:
+	"""CONFIG_TEMPLATE with the two app placeholders filled in. No arguments = unchanged.
+
+	The value is quoted with json.dumps because YAML 1.2 is a JSON superset: an app name
+	like `Acme: The Shop` or `#1 Store` would otherwise break the document, and the bare
+	words `yes`/`no`/`on` would parse as booleans. Anchored on the whole `key: value` pair
+	so it cannot match a comment further down the file.
+	"""
+	text = CONFIG_TEMPLATE
+	if app_name:
+		text = text.replace('name: My App', f'name: {json.dumps(app_name)}', 1)
+	if base_url:
+		text = text.replace('base_url: https://example.com', f'base_url: {json.dumps(base_url)}', 1)
+	return text
 
 
 @dataclass

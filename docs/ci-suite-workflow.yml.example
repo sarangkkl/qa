@@ -1,0 +1,71 @@
+# Example: run the approved QA suite in CI.
+#
+# Copy to .github/workflows/qa-suite.yml to enable. Two things make this possible:
+#   - the vault's environment fallback, so no run stops at a login prompt
+#   - `qa suite` exit codes: 0 all passed · 1 something failed · 2 nothing ran
+#
+# Store each credential your vault.yaml declares as a repository secret named
+# NKQA_SECRET_<NAME> (upper-cased). `qa vault status` on your machine lists exactly which.
+
+name: QA suite
+
+on:
+  schedule:
+    - cron: '0 6 * * 1-5' # weekday mornings, before anyone looks
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Only scenarios carrying this tag'
+        required: false
+        default: ''
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: |
+          python -m venv venv
+          venv/bin/pip install -e .
+          venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Check the workspace is ready
+        run: |
+          venv/bin/qa models    # every model role has its API key
+          venv/bin/qa vault     # every declared credential is set; exits 1 if not
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NKQA_SECRET_QA_USER: ${{ secrets.NKQA_SECRET_QA_USER }}
+          NKQA_SECRET_QA_PASSWORD: ${{ secrets.NKQA_SECRET_QA_PASSWORD }}
+
+      - name: Run the suite
+        # --strict also fails the build when a scenario is a draft or went STALE, so a
+        # half-empty suite cannot quietly pass. Drop it if you keep drafts on main.
+        run: venv/bin/qa suite --strict ${{ inputs.tag && format('--tag {0}', inputs.tag) || '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NKQA_SECRET_QA_USER: ${{ secrets.NKQA_SECRET_QA_USER }}
+          NKQA_SECRET_QA_PASSWORD: ${{ secrets.NKQA_SECRET_QA_PASSWORD }}
+          BROWSER_USE_HEADLESS: 'true'
+
+      - name: What changed since the last suite
+        if: always()
+        run: venv/bin/qa compare || true # informational; the suite step already set the verdict
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-evidence
+          path: |
+            runs/suite--*/
+            runs/*/results.md
+            runs/*/last_run.gif
+          retention-days: 30
