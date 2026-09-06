@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from nkqa import actions
+from nkqa import config as config_mod
 from nkqa import scenarios as scenarios_mod
 from nkqa.chats import Chat
 from nkqa.config import Config
@@ -130,12 +131,18 @@ async def _learn(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.learn(ctx.ws, ctx.ch, str(a.get('path', '')), ctx.config)
 
 
+async def _correct(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.correct(ctx.ws, ctx.ch, str(a.get('instruction', '')), ctx.config)
+
+
 async def _reflect(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.reflect(ctx.ws, ctx.ch, str(a.get('run', '')), ctx.config)
 
 
 async def _crawl(ctx: ShellContext, a: dict[str, Any]) -> int:
-	return await actions.crawl(ctx.ws, ctx.ch, int(a.get('pages') or 0), a.get('model'), ctx.config, ctx.hitl, ctx.stop)
+	return await actions.crawl(
+		ctx.ws, ctx.ch, int(a.get('pages') or 0), a.get('model'), ctx.config, ctx.hitl, ctx.stop, bool(a.get('refresh'))
+	)
 
 
 async def _suite(ctx: ShellContext, a: dict[str, Any]) -> int:
@@ -170,7 +177,17 @@ async def _auth(ctx: ShellContext, a: dict[str, Any]) -> int:
 
 
 async def _models(ctx: ShellContext, a: dict[str, Any]) -> int:
-	return await actions.models(ctx.ch)
+	return await actions.models(ctx.ch, ctx.ws)
+
+
+async def _set_model(ctx: ShellContext, a: dict[str, Any]) -> int:
+	code = await actions.set_model(
+		ctx.ws, ctx.ch, str(a.get('provider', '')), str(a.get('smart', '')), str(a.get('fast', ''))
+	)
+	# The session holds one Config, read when the socket opened. Without this the file says
+	# one thing and the next run uses another - the setting would look applied and do nothing.
+	ctx.config = config_mod.load(ctx.ws.config_file)
+	return code
 
 
 async def _forget(ctx: ShellContext, a: dict[str, Any]) -> int:
@@ -273,12 +290,24 @@ ACTION_COMMANDS = [
 	),
 	Command('reflect', 'update the appmap from a past run', _reflect, [Param('run', 'run dir name', required=True)]),
 	Command(
+		'correct',
+		'fix what the app map gets wrong, in your own words',
+		_correct,
+		# rest=True so it reads as a sentence: /correct client rows open /clients/<id>
+		[
+			Param(
+				'instruction', 'what is actually true, e.g. "client rows open /clients/<id>"', rest=True, required=True
+			)
+		],
+	),
+	Command(
 		'crawl',
 		'explore the live app read-only to enrich the appmap',
 		_crawl,
 		[
 			Param('pages', 'page budget', type='integer', flag=True),
 			Param('model', 'executor model override', flag=True),
+			Param('refresh', 're-map pages already documented', type='boolean', flag=True),
 		],
 	),
 	Command(
@@ -324,6 +353,22 @@ ACTION_COMMANDS = [
 		],
 	),
 	Command('models', 'show model roles, providers, and API key status', _models),
+	Command(
+		'set-model',
+		'choose the provider and models config.yaml uses (anthropic | openai)',
+		_set_model,
+		[
+			Param('provider', 'anthropic | openai', flag=True),
+			Param('smart', 'model id for the smart tier (planning, revising)', flag=True),
+			Param('fast', 'model id for the fast tier (executing, reflecting, chat)', flag=True),
+		],
+		# The agent must never choose the model it is about to be judged with, or pick the
+		# cheapest one to get through a task. Same reasoning as approve and the vault writes.
+		human_only=True,
+		# Settings has to work while something is running - that is exactly when you notice
+		# the model is wrong. It writes one config file, touches no browser and never asks.
+		instant=True,
+	),
 ]
 
 # Session controls: real commands over the socket and in the shell, but deliberately not

@@ -5,19 +5,22 @@
  */
 
 import type { Job, Session } from '../api/socket'
-import type { ConnectorInfo, Health } from '../api/types'
+import type { ConnectorInfo, Health, WorkspaceState } from '../api/types'
+import { ModelPicker } from '../components/ModelPicker'
 import { Connectors } from './Connectors'
 
 export function Credentials({
 	session,
 	jobs,
 	health,
+	state,
 	connectors,
 	busy,
 }: {
 	session: Session
 	jobs: Job[]
 	health: Health | null
+	state: WorkspaceState
 	connectors: ConnectorInfo[]
 	busy: boolean
 }) {
@@ -41,7 +44,16 @@ export function Credentials({
 				<p className="empty">Press Refresh to read the vault.</p>
 			)}
 
-			<h3>Models</h3>
+			<ModelPicker
+				session={session}
+				jobs={jobs}
+				providers={state.providers}
+				aliases={state.aliases}
+				roles={state.models}
+				health={health}
+				root={state.root}
+			/>
+
 			{health && (
 				<table className="grid">
 					<thead>

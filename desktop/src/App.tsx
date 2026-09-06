@@ -246,6 +246,7 @@ export default function App() {
 						session={session.current}
 						jobs={jobs}
 						health={health}
+						state={state}
 						connectors={state.connectors}
 						busy={busy}
 					/>

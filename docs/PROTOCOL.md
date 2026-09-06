@@ -76,7 +76,7 @@ A loopback port is reachable by every browser tab on the machine.
 | Route | Returns |
 |---|---|
 | `GET /health` | `nkqa` and `browser_use` versions, `workspace`, `busy`, and `roles` — per model role: `model`, `provider`, `missing_keys`. `models_ok` is true when no role is missing a key. This is the "is this workspace ready to run" check. |
-| `GET /workspace` | `app_name`, `base_url`, `headless`, `models`, `appmap` (relative .md paths), `scenarios` (see below), `runs` (newest first), `commands` (see §6). Everything the project shell needs on open. |
+| `GET /workspace` | `app_name`, `base_url`, `headless`, `models` (role → tier or model id), `aliases` (the `smart`/`fast` tiers), `providers` (see below), `appmap` (relative .md paths), `scenarios` (see below), `runs` (newest first), `commands` (see §6). Everything the project shell needs on open. |
 | `GET /scenarios/{id}` | One scenario plus `body`, the raw markdown. `404` if unknown. |
 | `GET /runs/{name}` | `steps`, `result` (the parsed `results.json`, or null), `artifacts` (`report`/`gif`/`history` → artifact URLs), `videos` (artifact URLs). |
 | `GET /chats` | `chats`: id, title, created, updated, turn count — newest first. |
@@ -93,6 +93,29 @@ A scenario looks like:
 `state` is `draft` · `ok` · `stale` · `deprecated` — the same four the runner enforces.
 `stale` means the file was edited after approval; render it as a warning, never as
 approved.
+
+`providers` is what the settings page offers:
+
+```json
+{"name": "openai", "label": "OpenAI",
+ "models": [{"id": "gpt-5.1", "label": "GPT-5.1", "tier": "smart"}]}
+```
+
+**It is a catalogue, not a validator.** Any model id reaches the provider verbatim, so this
+list going stale costs a dropdown entry, never a capability — offer a way to type an id that
+is not in it. `tier` says which of the two slots a model is the natural pick for, which is
+what makes "switch provider" fill both in one move.
+
+**Changing the model is `set-model`, not a PUT.** It writes the `smart`/`fast` aliases in
+`config.yaml` — the two tiers every role points at — so one change moves all five roles and
+the split between planning and executing survives. A role someone has pointed straight at a
+model is left alone and named in the output. Read the result back from `/workspace` and
+`/health` rather than assuming it applied: `/health` is what knows whether the new provider's
+key is actually set.
+
+**No API key ever crosses this protocol.** Keys are read from the workspace's `.env` when the
+sidecar launches, so a key sent here would not take effect until the next launch anyway.
+`/health` names the missing ones; putting them there is a human editing a file.
 
 **`/artifacts` is path-scoped twice.** The resolved path must stay inside the workspace
 root (so `../../.ssh/id_rsa` is a 404, not a file), and the suffix must be one of
@@ -193,18 +216,25 @@ at once.
  "params": [{"name": "id", "help": "scenario id", "type": "string", "flag": false, "required": false}]}
 ```
 
-- **`instant: true`** (only `mode`) — runs outside the one-job-at-a-time runner, so it still
+- **`instant: true`** (`mode`, `set-model`) — runs outside the one-job-at-a-time runner, so it still
   works while a run is in flight. That is the whole point: a session control you cannot use
   mid-run is a session control you cannot use. Only safe for a command that drives no
   browser, writes nothing a running job is also writing, and **never asks** — an instant
   command's channel is not in the pending-ask map, so a prompt from one could never be
   answered and would hang forever.
-- **`human_only: true`** (`approve`, `mode`, the mutating vault commands) — served over the socket, because a human at a
+- **`human_only: true`** (`approve`, `mode`, `set-model`, the mutating vault commands) — served over the socket, because a human at a
   keyboard is what drives it, but it is absent from the chat agent's tool list and must
   stay that way. In the UI it needs the full scenario body visible and a deliberate second
   click. A one-click approve chip is a regression of the product's trust story.
 - **`shell_only: true`** (`help`, `exit`, `forget`) — terminal meta commands. The server
   refuses them with code `2`.
+
+**`crawl` and `correct` write the app map, so `/workspace` is stale after them.** A crawl now
+writes one page per screen *while it runs*, each as its own git commit, rather than one
+update at the end — so `appmap` in `GET /workspace` grows during the job, not only after it.
+Every recorded page arrives as an `artifact` event carrying `{"appmap": "pages/<slug>.md"}`;
+render those as progress. Re-read `/workspace` when the job finishes, and treat a stopped
+crawl as a success: it kept everything it had already mapped, and its exit code says so.
 
 ## 7. Rules that are not negotiable
 

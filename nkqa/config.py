@@ -76,6 +76,52 @@ def render_template(app_name: str = '', base_url: str = '') -> str:
 	return text
 
 
+def set_aliases(text: str, updates: dict[str, str]) -> str:
+	"""Rewrite values in config.yaml's top-level `aliases:` block, leaving the rest byte-identical.
+
+	A round-trip through yaml.safe_dump would be five lines instead of thirty, and would throw
+	away every comment in the file - including the ones telling you what each role is for. The
+	settings page edits two values; it has no business reformatting a file the user also edits
+	by hand.
+
+	Values are quoted with json.dumps for the same reason render_template does it: YAML 1.2 is
+	a JSON superset, so this is always valid and never depends on the model id being free of
+	characters YAML treats as structure.
+	"""
+	lines = text.splitlines()
+	out: list[str] = []
+	pending = dict(updates)
+	inside = False
+	insert_at = -1
+
+	for line in lines:
+		stripped = line.strip()
+		top_level = line[:1] not in (' ', '\t') and stripped != ''
+		if inside and top_level:  # the next top-level key ends the block
+			inside = False
+		if top_level and stripped.split('#', 1)[0].rstrip() == 'aliases:':
+			inside = True
+			out.append(line)
+			insert_at = len(out)
+			continue
+		if inside and not stripped.startswith('#'):
+			key = stripped.split(':', 1)[0].strip()
+			if key in pending:
+				indent = line[: len(line) - len(line.lstrip())]
+				out.append(f'{indent}{key}: {json.dumps(pending.pop(key))}')
+				continue
+		out.append(line)
+
+	trailing = '\n' if text.endswith('\n') else ''
+	if not pending:
+		return '\n'.join(out) + trailing
+	fresh = [f'  {k}: {json.dumps(v)}' for k, v in pending.items()]
+	if insert_at < 0:  # no aliases block at all - add one
+		return '\n'.join([*out, '', 'aliases:', *fresh]) + '\n'
+	out[insert_at:insert_at] = fresh
+	return '\n'.join(out) + trailing
+
+
 @dataclass
 class MCPServer:
 	name: str

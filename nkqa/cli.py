@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from nkqa import actions
 from nkqa import workspace as workspace_mod
+from nkqa.stop import StopSignal
 from nkqa.workspace import Workspace
 
 
@@ -50,9 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
 	reflect = sub.add_parser('reflect', help='update the appmap from a past run (auto after runs by default)')
 	reflect.add_argument('run', help='run dir name under runs/')
 
+	correct = sub.add_parser('correct', help='fix what the app map gets wrong, in your own words')
+	correct.add_argument('instruction', nargs='+', help='what is actually true')
+
 	crawl = sub.add_parser('crawl', help='explore the live app read-only and enrich the appmap (optional)')
 	crawl.add_argument('--pages', type=int, default=0, help='page budget (default: appmap.crawl_pages)')
 	crawl.add_argument('--model', default=None, metavar='MODEL', help='executor model override')
+	crawl.add_argument('--refresh', action='store_true', help='re-map pages already documented (the app changed)')
 
 	bug = sub.add_parser('file-bug', help='file a Jira bug from a failed run (human-instructed only)')
 	bug.add_argument('run', help='run dir name under runs/, e.g. checkout-coupon--20260826-2238')
@@ -90,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 	sub.add_parser('list', help='list all recorded runs')
 	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
+
+	set_model = sub.add_parser('set-model', help='choose the provider and models config.yaml uses')
+	set_model.add_argument('--provider', default='', metavar='NAME', help='anthropic | openai')
+	set_model.add_argument('--smart', default='', metavar='ID', help='model for planning and revising')
+	set_model.add_argument('--fast', default='', metavar='ID', help='model for executing, reflecting, chat')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
 	return parser
 
@@ -130,6 +140,8 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.approve(ws, ch, args.id)))
 	if command == 'list':
 		sys.exit(actions.run_sync(actions.list_runs(ws, ch)))
+	if command == 'set-model':
+		sys.exit(actions.run_sync(actions.set_model(ws, ch, args.provider, args.smart, args.fast)))
 	if command == 'auth':
 		sys.exit(actions.run_sync(actions.auth(ws, ch, args.server, args.reset)))
 	if command == 'plan':
@@ -144,8 +156,13 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.learn(ws, ch, args.path)))
 	if command == 'reflect':
 		sys.exit(actions.run_sync(actions.reflect(ws, ch, args.run)))
+	if command == 'correct':
+		sys.exit(actions.run_sync(actions.correct(ws, ch, ' '.join(args.instruction))))
 	if command == 'crawl':
-		sys.exit(actions.run_sync(actions.crawl(ws, ch, args.pages, args.model)))
+		# The signal is shared with the action so the first Ctrl+C reaches the browser agent
+		# itself, not just the task wrapping it. A crawl is the longest thing `qa` runs.
+		stop = StopSignal()
+		sys.exit(actions.run_sync(actions.crawl(ws, ch, args.pages, args.model, stop=stop, refresh=args.refresh), stop))
 	if command == 'file-bug':
 		sys.exit(actions.run_sync(actions.file_bug(ws, ch, args.run, args.step, args.project)))
 	if command == 'suite':

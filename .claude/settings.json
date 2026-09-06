@@ -48,10 +48,22 @@
       "Bash(cargo check *)",
       "Bash(pkill -f \"nkqa-desktop\")",
       "Bash(/bin/sleep 1)",
-      "Bash(venv/bin/pyinstaller --noconfirm --onefile --name nkqa-server --collect-all browser_use --collect-all cdp_use --collect-all nkqa --collect-all fastapi --collect-all uvicorn --collect-all keyring --collect-all pydantic --collect-all starlette --hidden-import nkqa.server.main --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on desktop/src-tauri/sidecar_entry.py)"
+      "Bash(venv/bin/pyinstaller --noconfirm --onefile --name nkqa-server --collect-all browser_use --collect-all cdp_use --collect-all nkqa --collect-all fastapi --collect-all uvicorn --collect-all keyring --collect-all pydantic --collect-all starlette --hidden-import nkqa.server.main --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on desktop/src-tauri/sidecar_entry.py)",
+      "Bash(ls venv/lib/python*/site-packages/browser_use/llm/ 2>/dev/null; sed -n 1,60p venv/lib/python*/site-packages/browser_use/llm/models.py 2>/dev/null)",
+      "Bash(venv/bin/python -m pytest tests/test_model_settings.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_server.py -q -k \"parked\")",
+      "Bash(git checkout *)",
+      "Bash(venv/bin/python -)",
+      "Bash(venv/bin/python -m pytest tests/test_crawler.py -q)",
+      "Bash(/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/bin/python -c ' *)",
+      "Bash(venv/bin/python -m pytest tests/test_appmap.py -q)",
+      "Bash(venv/bin/python -m pytest tests/test_appmap.py -q -k \"echoing_the_label\")",
+      "Bash(cp appmap/appmap/overview.md overview.md)",
+      "Bash(rm -rf appmap)"
     ],
     "additionalDirectories": [
-      "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution"
+      "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",
+      "/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/lib/python*/site-packages/browser_use/llm"
     ]
   }
 }

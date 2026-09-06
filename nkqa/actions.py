@@ -97,10 +97,12 @@ async def approve(ws: Workspace, ch: Channel, scenario_id: str) -> int:
 	return 0
 
 
-async def models(ch: Channel) -> int:
+async def models(ch: Channel, ws: Workspace | None = None) -> int:
 	from nkqa.models import ROLES, describe_role
 
-	ws = workspace_mod.find()
+	# The caller's workspace wins. Falling back to find() is right for the CLI, which runs
+	# inside the workspace, and wrong for the sidecar, whose cwd is wherever it was launched.
+	ws = ws or workspace_mod.find()
 	cfg = config_mod.load(ws.config_file if ws else None)
 	source = str(ws.config_file) if ws else 'built-in defaults (no workspace found)'
 	await ch.log(f'\nModel setup from: {source}\n')
@@ -120,8 +122,62 @@ async def models(ch: Channel) -> int:
 				{'role': role, 'model': name, 'provider': provider, 'missing': missing},
 			)
 		)
-	await ch.log('\nChange models in config.yaml (models/aliases); put keys in .env.')
+	await ch.log('\nChange models with `qa set-model` or in config.yaml (models/aliases); put keys in .env.')
 	return 0 if ok else 1
+
+
+async def set_model(ws: Workspace, ch: Channel, provider: str = '', smart: str = '', fast: str = '') -> int:
+	"""Point the smart/fast aliases at a provider's models, in config.yaml.
+
+	It edits the two aliases, not the five roles, because that is where the choice belongs:
+	every role ships pointing at a tier, so one edit moves all of them and the smart/fast split
+	survives. A role someone has since pointed straight at a model is left alone and called out
+	- silently rewriting a line a human wrote by hand is worse than not moving it.
+
+	Writing the key is deliberately not part of this. Keys are read from the environment at
+	launch, so a key typed here would not take effect until the next one anyway, and it would
+	put a live credential on a code path whose job is editing a tracked config file.
+	"""
+	from nkqa.models import CATALOGUE, PROVIDER_LABELS, ROLES, TIERS, default_tier_models, qualify, split_model
+
+	cfg = config_mod.load(ws.config_file)
+	if not (provider or smart or fast):
+		await ch.log('Usage: qa set-model --provider anthropic|openai [--smart ID] [--fast ID]\n')
+		for name, entries in CATALOGUE.items():
+			await ch.log(f'{PROVIDER_LABELS.get(name, name)} ({name})')
+			for entry in entries:
+				await ch.log(f'  {entry["tier"]:<6} {entry["id"]:<22} {entry["label"]}')
+		await ch.log('\nAny other model id works too - it is passed to the provider as you type it.')
+		return 2
+
+	if provider and provider not in CATALOGUE:
+		await ch.log(f'❌ Unknown provider "{provider}". Use one of: {", ".join(sorted(CATALOGUE))}')
+		return 2
+	# Naming a provider alone means "move everything to it"; naming a tier narrows that.
+	picks = default_tier_models(provider) if provider else {}
+	picks |= {tier: value for tier, value in (('smart', smart), ('fast', fast)) if value}
+	try:
+		updates = {
+			tier: qualify(provider or split_model(cfg.aliases.get(tier, ''))[0], value) for tier, value in picks.items()
+		}
+	except ValueError as e:
+		await ch.log(f'❌ {e}')
+		return 2
+
+	ws.config_file.write_text(config_mod.set_aliases(ws.config_file.read_text(encoding='utf-8'), updates), 'utf-8')
+	for tier, value in updates.items():
+		await ch.emit(Event('log', f'✅ {tier} → {value}', {'alias': tier, 'model': value}))
+
+	detached = [r for r in ROLES if cfg.models.get(r, '') not in TIERS]
+	if detached:
+		await ch.log(
+			f'\n⚠️  {", ".join(detached)} point straight at a model in config.yaml, not at an alias, '
+			'so they did not move. Edit the `models:` block to bring them back.'
+		)
+	# The table is shown, but its exit code is not ours: it reports whether the keys are set,
+	# and a missing key does not mean the change failed. `qa models` answers that question.
+	await models(ch, ws)
+	return 0
 
 
 AUTH_READY = re.compile(r'connected to remote server|proxy established|already authorized', re.I)
@@ -278,6 +334,12 @@ async def explore(
 	return await run_freeform(ws, _cfg(ws, config), _hitl(ws, hitl, ch), ch, url, focus, name, model, stop)
 
 
+async def correct(ws: Workspace, ch: Channel, instruction: str, config: Config | None = None) -> int:
+	from nkqa.correct import correct as _correct
+
+	return await _correct(ws, _cfg(ws, config), ch, instruction)
+
+
 async def learn(ws: Workspace, ch: Channel, path: str, config: Config | None = None) -> int:
 	from nkqa.ingest import learn as _learn
 
@@ -304,11 +366,12 @@ async def crawl(
 	config: Config | None = None,
 	hitl: HumanInTheLoop | None = None,
 	stop: StopSignal | None = None,
+	refresh: bool = False,
 ) -> int:
 	from nkqa.crawler import crawl as _crawl
 
 	cfg = _cfg(ws, config)
-	return await _crawl(ws, cfg, _hitl(ws, hitl, ch), ch, pages or cfg.crawl_pages, model, stop)
+	return await _crawl(ws, cfg, _hitl(ws, hitl, ch), ch, pages or cfg.crawl_pages, model, stop, refresh)
 
 
 async def suite(
@@ -427,9 +490,13 @@ async def vault(ws: Workspace, ch: Channel, action: str = 'status', name: str = 
 	return await command.handler(ctx, {'name': name, 'scenario': scenario})
 
 
-def run_sync(coro: Coroutine[Any, Any, int]) -> int:
-	"""Run an async action from the synchronous CLI, with a Ctrl+C that works."""
-	return asyncio.run(interruptible(coro))
+def run_sync(coro: Coroutine[Any, Any, int], stop: StopSignal | None = None) -> int:
+	"""Run an async action from the synchronous CLI, with a Ctrl+C that works.
+
+	Pass the same StopSignal the action got: cancelling the task alone leaves the browser
+	agent to notice on its own schedule, and until it does, Ctrl+C looks ignored.
+	"""
+	return asyncio.run(interruptible(coro, stop))
 
 
 def terminal() -> Channel:

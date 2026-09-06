@@ -134,7 +134,13 @@ def test_router_records_the_command_it_ran(ws: Workspace, monkeypatch: pytest.Mo
 
 def test_a_refused_approval_is_recorded_too(ws: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
 	ctx, _ = ctx_with_chat(
-		ws, monkeypatch, [agent.ChatDecision(reply='Approving it.', command='approve', args={'id': 'auth/login'})]
+		ws,
+		monkeypatch,
+		[
+			agent.ChatDecision(
+				reply='Approving it.', command='approve', args=[agent.ChatArg(name='id', value='auth/login')]
+			)
+		],
 	)
 	assert asyncio.run(session.handle(ctx, 'approve the login scenario')) == 1
 

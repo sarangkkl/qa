@@ -67,12 +67,30 @@ export interface CommandInfo {
 /** How the session answers a permission request. Session-scoped: resets on every reconnect. */
 export type Autonomy = 'ask' | 'allow' | 'refuse'
 
+export interface ModelChoice {
+	id: string
+	label: string
+	/** Which tier this model is offered for: 'smart' plans, 'fast' executes. */
+	tier: string
+}
+
+export interface ProviderInfo {
+	name: string
+	label: string
+	models: ModelChoice[]
+}
+
 export interface WorkspaceState {
 	root: string
 	app_name: string
 	base_url: string
 	headless: boolean
+	/** role -> alias name or a model id written straight into config.yaml. */
 	models: Record<string, string>
+	/** The two tiers the roles point at. What the settings page edits. */
+	aliases: Record<string, string>
+	/** What settings offers, not what it accepts - any id typed in is passed through. */
+	providers: ProviderInfo[]
 	appmap: string[]
 	scenarios: ScenarioSummary[]
 	runs: string[]

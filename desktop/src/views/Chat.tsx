@@ -51,10 +51,15 @@ export function Chat({
 		api.chats(connection).then((r) => setList(r.chats)).catch(() => setList([]))
 	}, [connection, jobs.length])
 
+	// Refetch when a job FINISHES, not only when one starts. Keying on `jobs.length` left the
+	// transcript a whole message behind, so a reply only turned up in it once you sent the next
+	// thing - and then sat alongside its own live bubble.
+	const finished = jobs.filter((j) => j.done).length
+
 	useEffect(() => {
 		if (!chatId) return setHistory(null)
 		api.chat(connection, chatId).then(setHistory).catch(() => setHistory(null))
-	}, [connection, chatId, jobs.length])
+	}, [connection, chatId, jobs.length, finished])
 
 	useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [jobs, history])
 
@@ -86,7 +91,20 @@ export function Chat({
 		setText('')
 	}
 
-	const live = jobs.filter((j) => mine.current.has(j.id))
+	// The agent's reply is written to two places - streamed as a job event AND saved as a turn -
+	// so once the transcript catches up it is on screen twice, which reads as the agent
+	// repeating itself after every message. Drop the bubble only when the transcript demonstrably
+	// carries everything it said.
+	//
+	// Line by line rather than "it is a finished say", because a `say` that ran a command also
+	// streamed that command's output, and the transcript keeps only the command name and its
+	// exit code. Dropping those bubbles would silently swallow a /correct diff. If any line is
+	// missing from the transcript, the bubble stays.
+	const spoken = useMemo(() => {
+		const said = new Set((history?.turns ?? []).map((t) => t.text.trim()).filter(Boolean))
+		return (job: Job) => job.done && job.events.every((e) => !e.text.trim() || said.has(e.text.trim()))
+	}, [history])
+	const live = jobs.filter((j) => mine.current.has(j.id) && !spoken(j))
 
 	return (
 		<div className="split">

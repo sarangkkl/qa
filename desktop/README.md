@@ -65,6 +65,16 @@ own process environment.
 - **A cancelled job must look different from a finished one.** The server sends
   `result.cancelled` and a `cancelled` ack with `ok`; render both, or a failed Stop is
   indistinguishable from a successful one.
+- **The model catalogue is a suggestion, not a whitelist.** Settings offers the list from
+  `GET /workspace`, but "Other" takes any id and it reaches the provider verbatim. A model
+  released after this build must stay reachable without shipping a new build.
+- **Settings edits the two tiers, never the five roles.** `smart` plans, `fast` drives the
+  browser; every role ships pointing at one of them, so one edit moves everything and the
+  cost/quality split survives. A role a human has pointed straight at a model is left alone
+  and named — silently rewriting a hand-edited line is worse than not moving it.
+- **The settings page never collects an API key.** Keys are read from `.env` when the sidecar
+  launches, so one typed here would do nothing until the next launch. Name the missing key
+  and the file; do not build a field that looks like it works.
 - **Autonomy resets to Ask on every reconnect, and that is deliberate** — a new socket is a
   new session with a fresh `HumanInTheLoop`. Never show a mode the server is not in. It
   never approves, never releases a credential, and is never persisted.

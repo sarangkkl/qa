@@ -35,9 +35,11 @@ qa compare                       # what changed between the two newest suite run
 qa vault                         # credentials this project needs: set? granted? bound to what?
 qa file-bug <run> [--step N]     # file a Jira bug from a failed run - always human-confirmed
 qa reflect <run>                 # update the appmap from a past run (automatic after runs)
-qa crawl                         # optional: explore the live app read-only to enrich the map
+qa crawl [--refresh]             # explore the live app read-only; skips pages already mapped
+qa correct "<what is true>"      # fix what the app map gets wrong, in your own words
 qa revise <id> "<how>"           # rewrite a scenario (invalidates its approval)
 qa models                        # roles -> models -> providers -> are the API keys set?
+qa set-model --provider openai   # switch provider (or --smart/--fast for one tier)
 ```
 
 ### Suites and CI
@@ -90,6 +92,20 @@ It's seeded by `qa learn` from a document you write - screenshots with a line or
 about each screen, roles, and flows - then grows automatically after every run
 (git-committed as `appmap: learned from <run>`; disable with `appmap.auto_reflect: false`).
 The planner reads all of it, so everything the map knows shows up in better scenarios.
+
+`qa crawl` fills it in from the live app, **writing each screen as it finishes with it** -
+one file, one commit, before it moves on. Stop a crawl and you keep every page it had
+already understood. It also skips what is already documented, so a second crawl spends its
+budget on new ground and never overwrites a page you wrote by hand (`--refresh` when the app
+really has changed).
+
+Ask the chat agent about the app and it answers from the map - and tells you when the map
+does not cover something instead of guessing. When it has something wrong, say so:
+
+    qa correct "client rows are clickable, they open /clients/<id>"
+
+It shows the diff and commits it as `appmap: corrected by you`, so `git revert` undoes a
+correction that came out wrong. Your edit wins over anything the agent learned on its own.
 
 Extra tools for the agent come from MCP servers listed in `config.yaml` (`mcp:` section):
 any server's tools can be exposed to the executor (test-data seeders, OTP readers, ...).

@@ -145,6 +145,8 @@ def create_app(ws: Workspace) -> FastAPI:
 
 	@app.get('/workspace', dependencies=guard)
 	def workspace_state() -> dict[str, Any]:
+		from nkqa.models import CATALOGUE, PROVIDER_LABELS
+
 		cfg = config_mod.load(ws.config_file)
 		return {
 			'root': str(ws.root),
@@ -152,6 +154,14 @@ def create_app(ws: Workspace) -> FastAPI:
 			'base_url': cfg.base_url,
 			'headless': cfg.headless,
 			'models': cfg.models,
+			'aliases': cfg.aliases,
+			# The catalogue is what the settings page offers, not what it accepts: any id typed
+			# in reaches the provider verbatim, so this list going stale costs a convenience,
+			# never a capability.
+			'providers': [
+				{'name': name, 'label': PROVIDER_LABELS.get(name, name), 'models': entries}
+				for name, entries in CATALOGUE.items()
+			],
 			'appmap': sorted(str(f.relative_to(ws.appmap_dir)) for f in ws.appmap_dir.rglob('*.md')),
 			'scenarios': [scenario_view(ws, s) for s in scenarios_mod.load_all(ws.scenarios_dir)],
 			'runs': [d.name for d in reversed(recorded_runs(ws.runs_dir))],

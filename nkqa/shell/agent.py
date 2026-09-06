@@ -4,19 +4,25 @@ The agent's tools come from the registry minus human_only entries, so it structu
 cannot approve a scenario: approving stays a human keystroke.
 """
 
+import asyncio
 from typing import Any
 
 from browser_use.llm.messages import AssistantMessage, BaseMessage, SystemMessage, UserMessage
 from pydantic import BaseModel, Field
 
+from nkqa import appmap
 from nkqa import chats as chats_mod
 from nkqa import scenarios as scenarios_mod
 from nkqa.chats import Turn
-from nkqa.models import resolve_llm
+from nkqa.models import model_name, resolve_llm
 from nkqa.shell.commands import REGISTRY, Command, ShellContext, agent_commands
 from nkqa.shell.render import paint
 
 MAX_STEPS = 3
+# A ceiling on one routing call. The client timeout in models.py bounds the HTTP request;
+# this bounds the whole thing including the provider's own retries, which are 5 deep on
+# OpenAI and 10 on Anthropic and would otherwise multiply straight through it.
+CHAT_TIMEOUT = 90.0
 
 CHAT_SYSTEM = """\
 You are the interactive front-end of a QA teammate CLI. Turn what the human says into
@@ -33,13 +39,39 @@ Rules:
 - Keep `reply` to one or two short sentences: what you are doing, or what you need.
 - After a command runs you are asked whether anything else is needed. Usually the answer
   is no: leave command empty and suggest the natural next step in `reply`.
+
+Answering questions about the app:
+- The app map below is what you know. Answer questions about screens, routes, roles and
+  flows from it directly - leave `command` empty and put the answer in `reply`. For this
+  kind of answer the two-sentence limit does not apply; be as detailed as the map allows.
+- Say when the map does not cover something instead of guessing. "The map does not say"
+  is a useful answer; an invented one is a bug that ends up in a test.
+- Never state a route, field or behaviour that is not in the map. If a file is listed as
+  not loaded, say it exists and that you have not read it.
+- When the human tells you something about the app that the map gets wrong or omits, call
+  `correct` with their correction as `instruction`. Pass on what THEY said - never your
+  own guesses, and never a correction they did not make.
 """
+
+
+class ChatArg(BaseModel):
+	name: str = Field(description='parameter name, exactly as listed for that command')
+	value: str = Field(description='the value, as a string')
 
 
 class ChatDecision(BaseModel):
 	reply: str = Field(description='what to tell the human, one or two short sentences')
 	command: str = Field(default='', description="command name to run, or '' to just reply")
-	args: dict[str, str] = Field(default_factory=dict, description='parameter name -> value, as strings')
+	# A list of pairs and not a dict, which is the obvious shape and does not work. OpenAI's
+	# structured outputs run in strict mode (browser-use hardcodes it), and strict mode rejects
+	# any object that does not declare its properties - so `dict[str, str]` reaches the API as
+	# an object with no properties and no required, and every chat message 400s. A list of
+	# declared objects is expressible everywhere; `args_of` puts the mapping back together.
+	args: list[ChatArg] = Field(default_factory=list[ChatArg], description='the command arguments')
+
+
+def args_of(decision: ChatDecision) -> dict[str, str]:
+	return {a.name: a.value for a in decision.args if a.name}
 
 
 def describe_commands() -> str:
@@ -78,9 +110,14 @@ def describe_state(ctx: ShellContext) -> str:
 	else:
 		listing = '(no scenarios yet)'
 	runs = '\n'.join(f'- {name}' for name in ctx.last_runs[-5:]) or '(no runs listed yet)'
+	# The app map, not just the test artifacts. Without it the router knew which scenarios
+	# existed but nothing whatsoever about the application they test, so it could not answer
+	# the first question anyone actually asks.
+	knowledge = appmap.context_for_chat(ctx.ws) or '(the app map is empty - try /crawl or /learn)'
 	return (
 		f'App: {ctx.config.app_name} ({ctx.config.base_url or "no base_url set"})\n\n'
-		f'Scenarios:\n{listing}\n\nRecent runs:\n{runs}'
+		f'Scenarios:\n{listing}\n\nRecent runs:\n{runs}\n\n'
+		f'=== What you know about the app (the app map) ===\n{knowledge}'
 	)
 
 
@@ -100,6 +137,29 @@ def coerce(cmd: Command, args: dict[str, str]) -> dict[str, Any]:
 	return out
 
 
+async def think(ctx: ShellContext, llm: Any, messages: list[BaseMessage]) -> ChatDecision | None:
+	"""One routing call, bounded and narrated. None means it failed and has been reported.
+
+	Unbounded was the old behaviour, and it is the worst one: a human typing "hi" sat in front
+	of `working…` with no model named, no elapsed time, and nothing to act on. Naming the model
+	matters because the usual cause is that it is the wrong one for this job - a slow reasoning
+	model wired to the `chat` role answers a greeting in minutes, if at all.
+	"""
+	using = model_name(ctx.config, 'chat') or 'the default model'
+	try:
+		response = await asyncio.wait_for(llm.ainvoke(messages, output_format=ChatDecision), CHAT_TIMEOUT)
+		return response.completion  # pyright: ignore[reportAny]
+	except TimeoutError:
+		await ctx.ch.log(
+			f'⏳ {using} did not answer within {CHAT_TIMEOUT:.0f}s.\n'
+			f'   Chat is routing through the `chat` model role. If that is a large reasoning model, '
+			f'point it at a small fast one:  /set-model --fast <model>'
+		)
+	except Exception as e:  # the provider's own error is the useful part; do not swallow it
+		await ctx.ch.log(f'💥 {using} failed ({type(e).__name__}: {str(e)[:200]})')
+	return None
+
+
 async def route(ctx: ShellContext, text: str) -> int:
 	llm = resolve_llm(ctx.config, 'chat')
 	if llm is None:
@@ -115,7 +175,9 @@ async def route(ctx: ShellContext, text: str) -> int:
 	]
 	last_code = 0
 	for _ in range(MAX_STEPS):
-		decision = (await llm.ainvoke(messages, output_format=ChatDecision)).completion
+		decision = await think(ctx, llm, messages)
+		if decision is None:
+			return 1
 		if decision.reply:
 			await ctx.ch.log(paint(f'\n{decision.reply}\n', 'cyan'))
 		name = decision.command.strip().lstrip('/')
@@ -128,15 +190,18 @@ async def route(ctx: ShellContext, text: str) -> int:
 			await ctx.ch.log(f'(no such command "{name}" - type /help)')
 			record(ctx, Turn(role='assistant', text=f'(no such command "{name}")'))
 			return 2
+		chosen = args_of(decision)
 		if cmd.human_only:
-			target = decision.args.get('id', '<id>')
-			refusal = f'Approving is yours to do: type  /approve {target}'
+			# Name the command it actually asked for. This used to say "approve" whatever was
+			# refused, so asking it to change autonomy told you to approve a scenario.
+			spoken = ' '.join(v for v in chosen.values() if v)
+			refusal = f'That one is yours to do: type  /{cmd.name} {spoken}'.rstrip()
 			await ctx.ch.log(paint(refusal, 'yellow'))
 			record(ctx, Turn(role='assistant', text=refusal))
 			return 1
 
-		last_code = await cmd.handler(ctx, coerce(cmd, decision.args))
-		record(ctx, Turn(role='assistant', text=decision.reply, command=name, args=decision.args, exit=last_code))
+		last_code = await cmd.handler(ctx, coerce(cmd, chosen))
+		record(ctx, Turn(role='assistant', text=decision.reply, command=name, args=chosen, exit=last_code))
 		messages.append(AssistantMessage(content=f'ran {name} -> exit {last_code}'))
 		messages.append(
 			UserMessage(content=f'`{name}` finished with exit code {last_code}. Anything else needed for the request?')

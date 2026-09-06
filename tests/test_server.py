@@ -313,6 +313,55 @@ def test_an_unknown_mode_is_a_usage_error(client: TestClient) -> None:
 	assert frames[-1]['code'] == 2
 
 
+def test_workspace_carries_what_the_settings_page_needs(client: TestClient) -> None:
+	"""The picker renders from this alone - no model names are hard-coded in TypeScript."""
+	state = get(client, '/workspace').json()
+	providers = {p['name']: p for p in state['providers']}
+	assert {'anthropic', 'openai'} <= set(providers)
+	assert providers['anthropic']['label'] == 'Anthropic'
+	assert all(m['id'] and m['label'] and m['tier'] for m in providers['openai']['models'])
+	# The current selection, so the form can open showing the truth rather than a guess.
+	assert set(state['aliases']) == {'smart', 'fast'}
+
+
+def test_choosing_a_model_over_the_socket_lands_in_the_config(client: TestClient, ws: Workspace) -> None:
+	frames = run_frames(client, [{'type': 'command', 'id': 'm1', 'name': 'set-model', 'args': {'provider': 'openai'}}])
+	assert frames[-1]['code'] == 0
+
+	from nkqa import config as config_mod
+
+	assert config_mod.load(ws.config_file).aliases['smart'].startswith('openai:')
+	# And the endpoint reports it, which is what makes the form show the saved value.
+	assert get(client, '/workspace').json()['aliases']['smart'].startswith('openai:')
+
+
+def test_the_model_can_be_changed_while_a_job_is_parked(client: TestClient, ws: Workspace) -> None:
+	"""Noticing the model is wrong happens *during* a run, which is when the runner is busy.
+
+	Without `instant` the runner refuses this with `busy`, and the settings page would be dead
+	exactly when you want it. `approve` parks on an ask, so the job is genuinely in flight.
+	"""
+	with client.websocket_connect(f'/session?token={TOKEN}') as socket:
+		socket.send_json({'type': 'command', 'id': 'j1', 'name': 'approve', 'args': {'id': 'auth/login'}})
+		while (parked := socket.receive_json())['type'] != 'ask':
+			pass  # waiting for a human, so the runner is busy
+
+		socket.send_json({'type': 'command', 'id': 'm1', 'name': 'set-model', 'args': {'provider': 'openai'}})
+		while (frame := socket.receive_json())['type'] != 'result' or frame['job'] != 'm1':
+			pass
+		assert frame['code'] == 0, 'the settings page must work during a run'
+
+		# Let the parked job finish rather than leaving it for socket teardown: the ask it is
+		# sitting on is still live, and answering it is what the human would have done.
+		socket.send_json({'type': 'answer', 'id': parked['id'], 'value': 'n'})
+		while (frame := socket.receive_json())['type'] != 'result' or frame['job'] != 'j1':
+			pass
+
+	from nkqa import config as config_mod
+
+	assert config_mod.load(ws.config_file).aliases['smart'].startswith('openai:')
+
+
 def test_mode_is_human_only_and_instant(client: TestClient) -> None:
 	"""human_only keeps it out of the agent's tool list: autonomy is never self-widened."""
 	from nkqa.shell.commands import agent_commands
