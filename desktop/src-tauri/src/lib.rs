@@ -8,7 +8,10 @@
 //! webview to that process over HTTP and a WebSocket. Nothing is proxied through Rust,
 //! so there is exactly one implementation of the protocol.
 
+mod menu;
+
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -55,6 +58,12 @@ struct Sidecar {
 #[derive(Default)]
 pub struct Sidecars {
 	running: Mutex<HashMap<String, Sidecar>>,
+	// Which window is showing which workspace. Closing one window must stop only what no
+	// other window still holds - two workspaces open at once is the point, and Cmd+W on one
+	// of them used to kill both.
+	claims: Mutex<HashMap<String /* window label */, String /* workspace */>>,
+	// Labels are never reused, so a closed window's label can never collide with a live one.
+	next_window: AtomicU32,
 	// One connect at a time. Without this, React's StrictMode double-invoke - or an
 	// impatient second click during the ~20 s boot - spawns a second sidecar for the same
 	// workspace, because nothing lands in `running` until the handshake arrives.
@@ -111,6 +120,8 @@ fn stop_hard(child: CommandChild) {
 async fn sidecar_stop(state: State<'_, Sidecars>, workspace: String) -> Result<(), String> {
 	// Held so this cannot race a connect that is mid-handshake for the same workspace.
 	let _gate = state.gate.lock().await;
+	// The claim survives: the window still owns this workspace and reconnects immediately.
+	// Releasing it here would let another window take it mid-restart.
 	let sidecar = state
 		.running
 		.lock()
@@ -122,7 +133,40 @@ async fn sidecar_stop(state: State<'_, Sidecars>, workspace: String) -> Result<(
 	Ok(())
 }
 
+/// Which window owns which workspace.
+///
+/// Lock order is always `claims` then `running`, and never both at once.
 impl Sidecars {
+	fn claim(&self, label: &str, workspace: &str) {
+		if let Ok(mut claims) = self.claims.lock() {
+			claims.insert(label.to_string(), workspace.to_string());
+		}
+	}
+
+	/// The window already showing this workspace, if any.
+	fn claimant(&self, workspace: &str) -> Option<String> {
+		let claims = self.claims.lock().ok()?;
+		claims
+			.iter()
+			.find(|(_, held)| held.as_str() == workspace)
+			.map(|(label, _)| label.clone())
+	}
+
+	/// Forget a window, and stop its sidecar only if it was the last one showing it.
+	fn release(&self, label: &str) {
+		let workspace = match self.claims.lock() {
+			Ok(mut claims) => match claims.remove(label) {
+				Some(held) if !claims.values().any(|other| other == &held) => held,
+				_ => return,
+			},
+			Err(_) => return,
+		};
+		let sidecar = self.running.lock().ok().and_then(|mut r| r.remove(&workspace));
+		if let Some(sidecar) = sidecar {
+			stop(sidecar.child);
+		}
+	}
+
 	fn stop_all(&self) {
 		if let Ok(mut running) = self.running.lock() {
 			for (_, sidecar) in running.drain() {
@@ -170,13 +214,25 @@ fn looks_like_workspace(path: &str) -> bool {
 	std::path::Path::new(path).join("config.yaml").is_file()
 }
 
-#[tauri::command]
-fn recent_workspaces(app: tauri::AppHandle) -> Vec<String> {
-	// A folder someone deleted should not haunt the picker.
-	read_recents(&app)
+/// What to call a workspace in a window title or a menu: its folder name.
+pub(crate) fn folder_name(workspace: &str) -> String {
+	std::path::Path::new(workspace)
+		.file_name()
+		.map(|name| name.to_string_lossy().into_owned())
+		.unwrap_or_else(|| workspace.to_string())
+}
+
+/// A folder someone deleted should not haunt the picker - or the File menu.
+pub(crate) fn valid_recents(app: &tauri::AppHandle) -> Vec<String> {
+	read_recents(app)
 		.into_iter()
 		.filter(|p| looks_like_workspace(p))
 		.collect()
+}
+
+#[tauri::command]
+fn recent_workspaces(app: tauri::AppHandle) -> Vec<String> {
+	valid_recents(&app)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,6 +257,68 @@ async fn pick_workspace(app: tauri::AppHandle) -> Option<PickedFolder> {
 	})
 }
 
+/// Percent-encode a query value. A workspace path can hold a space, a `&` or a `#`, any of
+/// which would split or truncate the intent silently.
+fn encode(value: &str) -> String {
+	value
+		.bytes()
+		.map(|b| match b {
+			b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+			_ => format!("%{b:02X}"),
+		})
+		.collect()
+}
+
+/// Open another native window: one window per workspace is the whole multi-workspace story.
+///
+/// `workspace` opens straight into it, `pick` lands on the picker with the folder chooser
+/// already up, neither is just the picker. The intent rides in the window's own URL rather
+/// than an event because a window that has not loaded yet has nothing listening.
+///
+/// Size, title and the minimums come from `tauri.conf.json` via `from_config`, so there is
+/// no second copy of them here to drift.
+pub(crate) fn open_window(app: &tauri::AppHandle, workspace: Option<String>, pick: bool) -> Result<(), String> {
+	if let Some(path) = &workspace {
+		if let Some(existing) = app
+			.state::<Sidecars>()
+			.claimant(path)
+			.and_then(|label| app.get_webview_window(&label))
+		{
+			return existing.set_focus().map_err(|e| e.to_string());
+		}
+	}
+
+	let mut config = app
+		.config()
+		.app
+		.windows
+		.first()
+		.cloned()
+		.ok_or_else(|| "no window is configured".to_string())?;
+	let n = app.state::<Sidecars>().next_window.fetch_add(1, Ordering::Relaxed);
+	config.label = format!("ws-{n}");
+	config.url = tauri::WebviewUrl::App(
+		match (&workspace, pick) {
+			(Some(path), _) => format!("index.html?open={}", encode(path)),
+			(None, true) => "index.html?intent=pick".to_string(),
+			(None, false) => "index.html".to_string(),
+		}
+		.into(),
+	);
+
+	tauri::WebviewWindowBuilder::from_config(app, &config)
+		.map_err(|e| e.to_string())?
+		.build()
+		.map(|_| ())
+		.map_err(|e| e.to_string())
+}
+
+/// Async on purpose: building a window from inside a synchronous command deadlocks on Windows.
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle, workspace: Option<String>, pick: bool) -> Result<(), String> {
+	open_window(&app, workspace, pick)
+}
+
 /// What the setup form collected. Never a secret: argv is world-readable via `ps`, so an
 /// API key must go over the authenticated socket as a `secret` ask, never through here.
 #[derive(Debug, Clone, Deserialize)]
@@ -210,21 +328,18 @@ pub struct InitOptions {
 }
 
 /// Start (or reuse) the sidecar for a workspace and return where to reach it.
+///
+/// The workspace is required, deliberately: there is no "reopen the last one". A workspace
+/// opens because someone chose it, never because it was open last time - reopening it on
+/// launch spawns a 30s sidecar and a real browser for a project nobody asked about.
 #[tauri::command]
 async fn sidecar_connect(
 	app: tauri::AppHandle,
+	window: tauri::WebviewWindow,
 	state: State<'_, Sidecars>,
-	workspace: Option<String>,
+	workspace: String,
 	init: Option<InitOptions>,
 ) -> Result<Connection, String> {
-	let workspace = match workspace {
-		Some(path) => path,
-		None => read_recents(&app)
-			.into_iter()
-			.next()
-			.ok_or_else(|| "no workspace chosen yet".to_string())?,
-	};
-
 	// With `init` the folder is *expected* not to be one yet - that is the whole point.
 	if init.is_none() && !looks_like_workspace(&workspace) {
 		return Err(format!(
@@ -236,8 +351,27 @@ async fn sidecar_connect(
 	// finished sidecar in the map below, instead of starting a second one.
 	let _gate = state.gate.lock().await;
 
-	if let Some(existing) = state.running.lock().map_err(|e| e.to_string())?.get(&workspace) {
-		return Ok(existing.connection.clone());
+	// One window per workspace. Two views on one sidecar are two sessions driving one
+	// browser, and neither window can tell whose run is on the screen - so send the human to
+	// the window that already has it instead of quietly opening a second view.
+	if let Some(owner) = state.claimant(&workspace) {
+		if owner != window.label() {
+			if let Some(existing) = app.get_webview_window(&owner) {
+				let _ = existing.set_focus();
+			}
+			return Err(format!("{workspace} is already open in another window."));
+		}
+	}
+
+	let existing = state
+		.running
+		.lock()
+		.map_err(|e| e.to_string())?
+		.get(&workspace)
+		.map(|sidecar| sidecar.connection.clone());
+	if let Some(connection) = existing {
+		state.claim(window.label(), &workspace);
+		return Ok(connection);
 	}
 
 	let mut args: Vec<String> = vec![
@@ -319,6 +453,13 @@ async fn sidecar_connect(
 		},
 	};
 
+	// The window can be closed during the ~30 s boot. A claim for a label that no longer
+	// exists is never released, so the sidecar would outlive anyone's interest in it.
+	if app.get_webview_window(window.label()).is_none() {
+		stop(child);
+		return Err("the window was closed while the workspace was opening".into());
+	}
+
 	// Drain the rest of the sidecar's output so its pipe never fills and blocks it.
 	tauri::async_runtime::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -327,7 +468,13 @@ async fn sidecar_connect(
 		.lock()
 		.map_err(|e| e.to_string())?
 		.insert(workspace.clone(), Sidecar { connection: connection.clone(), child });
+	state.claim(window.label(), &workspace);
 	remember(&app, &workspace);
+	// Open Recent is a snapshot of what `remember` just wrote.
+	menu::refresh(&app);
+	// The Window menu lists windows by title, and "nkqa" three times is useless. Set it here
+	// rather than from TS: no new ACL permission, and it lands with the handshake.
+	let _ = window.set_title(&format!("{} — nkqa", folder_name(&workspace)));
 	Ok(connection)
 }
 
@@ -337,20 +484,39 @@ pub fn run() {
 		.plugin(tauri_plugin_shell::init())
 		.plugin(tauri_plugin_dialog::init())
 		.manage(Sidecars::default())
+		// In `setup`, not `.menu()`: that closure runs before Tauri manages its path resolver,
+		// and Open Recent is read from a file under the app data dir.
+		.setup(|app| {
+			let handle = app.handle();
+			handle.set_menu(menu::build(handle)?)?;
+			Ok(())
+		})
+		.on_menu_event(menu::on_event)
 		.invoke_handler(tauri::generate_handler![
 			sidecar_connect,
 			sidecar_stop,
 			recent_workspaces,
-			pick_workspace
+			pick_workspace,
+			new_window
 		])
 		.on_window_event(|window, event| {
-			// Closing the last window must not leave an orphaned sidecar holding a browser.
+			// Only this window's sidecar, and only if no other window is still showing it -
+			// closing one workspace must leave the other windows working.
 			if let tauri::WindowEvent::Destroyed = event {
 				if let Some(state) = window.app_handle().try_state::<Sidecars>() {
-					state.stop_all();
+					state.release(window.label());
 				}
 			}
 		})
-		.run(tauri::generate_context!())
-		.expect("error while running nkqa");
+		.build(tauri::generate_context!())
+		.expect("error while building nkqa")
+		.run(|app, event| {
+			// The backstop: quitting can outrun the per-window Destroyed events, and a sidecar
+			// left running is holding a real browser.
+			if let tauri::RunEvent::Exit = event {
+				if let Some(state) = app.try_state::<Sidecars>() {
+					state.stop_all();
+				}
+			}
+		});
 }

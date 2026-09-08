@@ -26,12 +26,24 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 	}
 }
 
-function fromQuery(): Connection | null {
+/** The handshake this page was launched with. Always null inside Tauri - there the handshake
+ * comes from the sidecar, and only after someone has picked a workspace. */
+export function queryConnection(): Connection | null {
 	const params = new URLSearchParams(window.location.search)
 	const port = Number(params.get('port'))
 	const token = params.get('token')
 	if (!port || !token) return null
 	return { port, token, workspace: params.get('workspace') ?? '' }
+}
+
+/** What this window was opened to do, carried in its own URL because a window that has not
+ * mounted yet has nothing listening for an event. Different keys from the browser's
+ * `?port=&token=`, and the two never appear together. */
+export function windowIntent(): { open: string } | { pick: true } | null {
+	const params = new URLSearchParams(window.location.search)
+	const open = params.get('open')
+	if (open) return { open }
+	return params.get('intent') === 'pick' ? { pick: true } : null
 }
 
 /** A folder the human picked, and whether it is already a workspace. */
@@ -48,24 +60,28 @@ export interface InitOptions {
 
 /** Ask Tauri to start (or re-report) the sidecar for a workspace.
  *
- * With `init` the sidecar creates the workspace first, so the folder is expected not to be
- * one yet. Creation lives in `nkqa/workspace.py`, never in the shell.
+ * The workspace is required: nothing opens itself, here or in Rust. With `init` the sidecar
+ * creates the workspace first, so the folder is expected not to be one yet. Creation lives
+ * in `nkqa/workspace.py`, never in the shell.
  */
-export async function connect(workspace?: string, init?: InitOptions): Promise<Connection> {
-	if (inTauri()) {
-		const args: Record<string, unknown> = {}
-		if (workspace !== undefined) args.workspace = workspace
-		if (init !== undefined) args.init = init
-		return await command<Connection>('sidecar_connect', args)
-	}
-	const fallback = fromQuery()
-	if (!fallback) {
+export async function connect(workspace: string, init?: InitOptions): Promise<Connection> {
+	if (!inTauri()) {
 		throw new Error(
 			'No sidecar. In a browser, start one with `nkqa-server --workspace <path>` and open ' +
 				'this page with ?port=<port>&token=<token> from its handshake line.',
 		)
 	}
-	return fallback
+	const args: Record<string, unknown> = { workspace }
+	if (init !== undefined) args.init = init
+	return await command<Connection>('sidecar_connect', args)
+}
+
+/** Ask for another native window. One window per workspace is the whole multi-workspace
+ * story - no tabs, no in-app switcher. Without a path the new window lands on the picker;
+ * with `pick` it opens the folder chooser there straight away. */
+export async function newWindow(workspace?: string, pick = false): Promise<void> {
+	if (!inTauri()) return
+	await command<null>('new_window', { workspace: workspace ?? null, pick })
 }
 
 /** Kill the sidecar for a workspace. Reconnecting afterwards respawns it. */

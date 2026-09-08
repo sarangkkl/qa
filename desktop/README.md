@@ -22,14 +22,16 @@ open the dev server with its handshake in the query string — no Rust toolchain
 
 ## How it fits together
 
-`src-tauri` owns exactly one thing: the sidecar's lifecycle. It spawns
+`src-tauri` owns two things: the sidecar's lifecycle and the native menu. It spawns
 `nkqa-server --workspace <path>`, reads the one-line handshake, hands `{port, token}` to
-the webview, and kills the process on close. **Nothing is proxied through Rust** — every
-read, command and prompt goes straight from the frontend to the sidecar, so there is one
-implementation of the protocol, and the same frontend runs in a plain browser.
+the webview, and on close kills what no other window is still holding. **Nothing is proxied
+through Rust** — every read, command and prompt goes straight from the frontend to the
+sidecar, so there is one implementation of the protocol, and the same frontend runs in a
+plain browser.
 
 One sidecar per open workspace, because the sidecar loads that workspace's `.env` into its
-own process environment.
+own process environment — and one window per workspace, so several can run at once. File ▸
+New Window (⇧⌘N), Open Workspace… (⌘O) and Open Recent are how you get a second one.
 
     src/api/    types (mirrors PROTOCOL.md) · connection · HTTP reads · the session socket
     src/views/  Chat · Scenarios · AppMap+Flows · Runs · Credentials · LivePane · picker
@@ -37,6 +39,19 @@ own process environment.
 
 ## Things not to undo
 
+- **Launch lands on the picker, always.** Neither `App.tsx` nor `sidecar_connect` will open a
+  workspace nobody named. Reopening the last one spawns a 30 s sidecar and a real browser for
+  a project the human may not have meant to touch.
+- **One window per workspace, and one workspace per window.** Not tabs, not an in-app
+  switcher: the sidecar owns a browser and a session, and two views on one sidecar cannot
+  tell whose run is on the screen. `Sidecars.claims` maps window → workspace; closing a window
+  stops only what no other window still holds, and opening a workspace that is already open
+  focuses the window that has it.
+- **The Edit submenu is not decoration.** Setting any menu replaces Tauri's default wholesale,
+  and those predefined copy/cut/paste/undo items *are* Cmd+C/V/Z in the webview. Delete them
+  and every chat box and secret field loses the clipboard.
+- **The Window submenu must keep `WINDOW_SUBMENU_ID`.** AppKit only lists the open windows in
+  a menu it was handed under that id — which is the thing that makes many windows navigable.
 - **Approve stays a two-step.** The button runs the real `approve` command; the server
   asks back with the whole scenario in the ask body, and the modal makes you read it and
   confirm. No one-click chip — that gate is the product.

@@ -70,7 +70,8 @@
       "Bash(echo \"---exit=$?\")",
       "Bash(cp nkqa/models.py /tmp/models.py.bak)",
       "Bash(venv/bin/pytest tests/test_model_settings.py -q)",
-      "Bash(grep -vE \"^\\\\s*#|^\\\\s*$\" /Users/gaurav/Documents/slrtesting/config.yaml)"
+      "Bash(grep -vE \"^\\\\s*#|^\\\\s*$\" /Users/gaurav/Documents/slrtesting/config.yaml)",
+      "Bash(xargs kill)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",

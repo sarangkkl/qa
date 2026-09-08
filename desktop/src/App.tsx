@@ -1,6 +1,15 @@
+import { listen } from '@tauri-apps/api/event'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from './api/client'
-import { connect, forceStop, inTauri, type InitOptions } from './api/connection'
+import {
+	connect,
+	forceStop,
+	inTauri,
+	newWindow,
+	queryConnection,
+	windowIntent,
+	type InitOptions,
+} from './api/connection'
 import { Session, type Job } from './api/socket'
 import type { AskFrame, Autonomy, Connection, Health, ImageFrame, WorkspaceState } from './api/types'
 import { AskModal } from './components/AskModal'
@@ -41,21 +50,35 @@ export default function App() {
 	// a fresh HumanInTheLoop, so a dropped connection genuinely resets this to 'ask'.
 	const [autonomy, setAutonomy] = useState<Autonomy>('ask')
 	const [stopping, setStopping] = useState('')
+	// A window the File menu opened to choose a folder should not make you click Open again.
+	const [autoPick, setAutoPick] = useState(0)
 	const session = useRef<Session | null>(null)
 	// A job id is opaque; the view that started a job owns it. This lives here, not in Chat,
 	// because Chat unmounts on every tab switch and a running job must not vanish with it.
 	const mine = useRef(new Set<string>())
 
-	// Reopen the last workspace on launch; in a browser the handshake may already be in
-	// the query string. A failure here has to be visible - silently landing on the picker
-	// with no reason given is the worst version of this.
-	useEffect(() => {
-		if (!inTauri() && !window.location.search.includes('port=')) return
+	const open = (workspace: string, init?: InitOptions) => {
+		setOpenError('')
 		setOpening(true)
-		connect()
+		connect(workspace, init)
 			.then(setConnection)
 			.catch((e: Error) => setOpenError(e.message))
 			.finally(() => setOpening(false))
+	}
+
+	// Launch always lands on the picker: a workspace opens because someone chose it, never
+	// because it was open last time - reopening it silently spawns a 30s sidecar and a real
+	// browser for a project nobody asked about. A window the File menu opened carries its
+	// intent in its own URL; a browser carries the whole handshake there.
+	useEffect(() => {
+		const preset = queryConnection()
+		if (preset) {
+			setConnection(preset)
+			return
+		}
+		const intent = windowIntent()
+		if (intent && 'open' in intent) open(intent.open)
+		else if (intent) setAutoPick(1)
 	}, [])
 
 	const refresh = useCallback(() => {
@@ -140,23 +163,42 @@ export default function App() {
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
 	}, [running, stop])
+	// The menu is app-wide, so each window decides for itself what a File verb means: a window
+	// still on the picker opens in place, a window that already has a workspace hands the job
+	// to a new one. Two workspaces in one window is exactly what this design refuses to build.
+	useEffect(() => {
+		if (!inTauri()) return
+		const subs = Promise.all([
+			listen<string>('menu:open-recent', (e) => {
+				if (connection) void newWindow(e.payload)
+				else open(e.payload)
+			}),
+			// A new window in pick mode rather than a dialog here: a folder that turns out not
+			// to be a workspace needs the setup form, and that has nowhere to render in a
+			// window already showing one.
+			listen('menu:open-workspace', () => {
+				if (connection) void newWindow(undefined, true)
+				else setAutoPick((n) => n + 1)
+			}),
+		])
+		return () => void subs.then((offs) => offs.forEach((off) => off()))
+	}, [connection])
+
 	// Jira drives three surfaces (plan from a ticket, file a bug, sign in). If it is not
 	// configured, those controls are absent rather than present-and-broken.
 	const hasJira = useMemo(() => (state?.connectors ?? []).some((c) => c.name === 'jira'), [state])
 
-	const open = (workspace?: string, init?: InitOptions) => {
-		setOpenError('')
-		setOpening(true)
-		connect(workspace, init)
-			.then(setConnection)
-			.catch((e: Error) => setOpenError(e.message))
-			.finally(() => setOpening(false))
-	}
-
 	// `connection && !state` is the gap after the handshake while /workspace is still loading:
 	// still starting, as far as anyone looking at the window is concerned.
 	if (!connection || !state) {
-		return <WorkspacePicker onOpen={open} error={openError || status} busy={opening || !!connection} />
+		return (
+			<WorkspacePicker
+				onOpen={open}
+				autoPick={autoPick}
+				error={openError || status}
+				busy={opening || !!connection}
+			/>
+		)
 	}
 
 	const answer = (value: string) => {

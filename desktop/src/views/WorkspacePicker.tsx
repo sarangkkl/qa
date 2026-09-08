@@ -5,7 +5,7 @@
  * lives in `nkqa/workspace.py` and nowhere else.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { inTauri, pickWorkspace, recentWorkspaces, type InitOptions } from '../api/connection'
 
 /** "my-shop" / "my_shop" -> "My Shop". A guess the human can correct in the field. */
@@ -20,10 +20,12 @@ function nameFromPath(path: string): string {
 
 export function WorkspacePicker({
 	onOpen,
+	autoPick,
 	error,
 	busy,
 }: {
-	onOpen: (workspace?: string, init?: InitOptions) => void
+	onOpen: (workspace: string, init?: InitOptions) => void
+	autoPick: number
 	error: string
 	busy: boolean
 }) {
@@ -45,6 +47,17 @@ export function WorkspacePicker({
 			})
 			.catch((e: Error) => setPickError(e.message))
 	}
+
+	// A window the File menu opened to choose a folder should not make you click Open again.
+	// The ref is not paranoia: StrictMode double-invokes this effect, and without it macOS
+	// stacks two folder dialogs on top of each other.
+	const picked = useRef(0)
+	useEffect(() => {
+		if (autoPick > 0 && picked.current !== autoPick) {
+			picked.current = autoPick
+			pick()
+		}
+	}, [autoPick])
 
 	const create = () => {
 		if (!setup) return
