@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import FakeChannel
 
 from nkqa import reflector, workspace
 from nkqa.appmap import AppmapUpdate, FileUpdate
@@ -62,7 +63,7 @@ def test_reflect_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 	ws = workspace.create(tmp_path)
 	run_dir = make_run(tmp_path)
 	stub(monkeypatch, AppmapUpdate(files=[FileUpdate(file='quirks.md', content='coupon field is slow')]))
-	written = asyncio.run(reflector.reflect(ws, Config(), run_dir))
+	written = asyncio.run(reflector.reflect(ws, Config(), FakeChannel(), run_dir))
 	assert written == ['quirks.md']
 	assert 'slow' in (ws.appmap_dir / 'quirks.md').read_text()
 
@@ -72,8 +73,8 @@ def test_auto_reflect_never_raises_and_respects_toggle(tmp_path: Path, monkeypat
 	run_dir = make_run(tmp_path)
 
 	stub(monkeypatch, RuntimeError('LLM exploded'))
-	asyncio.run(reflector.auto_reflect(ws, Config(), run_dir))  # must not raise
+	asyncio.run(reflector.auto_reflect(ws, Config(), FakeChannel(), run_dir))  # must not raise
 
 	stub(monkeypatch, AppmapUpdate(files=[FileUpdate(file='quirks.md', content='x')]))
-	asyncio.run(reflector.auto_reflect(ws, Config(auto_reflect=False), run_dir))
+	asyncio.run(reflector.auto_reflect(ws, Config(auto_reflect=False), FakeChannel(), run_dir))
 	assert not (ws.appmap_dir / 'quirks.md').exists()  # toggle off -> zero writes

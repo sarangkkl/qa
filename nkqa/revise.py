@@ -11,6 +11,7 @@ from nkqa import scenarios as scenarios_mod
 from nkqa.config import Config
 from nkqa.models import resolve_llm
 from nkqa.scenarios import Step
+from nkqa.ui import Channel
 from nkqa.workspace import Workspace
 
 
@@ -39,22 +40,22 @@ scenario. Rules:
 """
 
 
-async def revise(ws: Workspace, config: Config, scenario_id: str, instruction: str) -> int:
+async def revise(ws: Workspace, config: Config, ch: Channel, scenario_id: str, instruction: str) -> int:
 	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 	if s is None:
-		print(f'No scenario "{scenario_id}". See:  qa scenarios')
+		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
 		return 2
 	if not instruction.strip():
-		print('Tell me how to revise it, e.g.  qa revise auth/login "make step 3 stricter"')
+		await ch.log('Tell me how to revise it, e.g.  qa revise auth/login "make step 3 stricter"')
 		return 2
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
-		print("Revising needs a real model: set models.planner in config.yaml (e.g. 'smart').")
+		await ch.log("Revising needs a real model: set models.planner in config.yaml (e.g. 'smart').")
 		return 2
 
 	was_approved = s.runnable() == 'ok'
 	current = s.path.read_text(encoding='utf-8')
-	print(f'✏️  Revising {s.id}...')
+	await ch.log(f'✏️  Revising {s.id}...')
 	response = await llm.ainvoke(
 		[
 			SystemMessage(content=REVISE_SYSTEM),
@@ -70,7 +71,7 @@ async def revise(ws: Workspace, config: Config, scenario_id: str, instruction: s
 	s.out_of_scope = r.out_of_scope
 	scenarios_mod.save(s)
 
-	print(f'📝 {s.id}: {r.changes or "revised"} ({len(s.steps)} steps)')
+	await ch.log(f'📝 {s.id}: {r.changes or "revised"} ({len(s.steps)} steps)')
 	if was_approved:
-		print(f'⚠️  Approval invalidated - the content changed. Re-approve to run:  qa approve {s.id}')
+		await ch.log(f'⚠️  Approval invalidated - the content changed. Re-approve to run:  qa approve {s.id}')
 	return 0

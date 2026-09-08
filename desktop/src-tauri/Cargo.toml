@@ -1,0 +1,30 @@
+[package]
+name = "nkqa-desktop"
+version = "0.1.0"
+description = "AI QA teammate"
+authors = ["Gaurav Sah"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "nkqa_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# tauri already pulls tokio in; we need the timeout helper for the handshake read and an
+# async mutex to serialise concurrent connects to the same workspace
+tokio = { version = "1", features = ["time", "sync"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

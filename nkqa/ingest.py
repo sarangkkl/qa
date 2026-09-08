@@ -23,6 +23,7 @@ from nkqa import appmap
 from nkqa.appmap import AppmapUpdate
 from nkqa.config import Config
 from nkqa.models import resolve_llm
+from nkqa.ui import Channel, Event
 from nkqa.workspace import Workspace
 
 IMAGE_LINK_RE = re.compile(r'!\[[^\]]*\]\(([^)\s]+)\)')
@@ -51,7 +52,7 @@ guessing. File paths must be relative like 'pages/login.md'.
 """
 
 
-def collect_inputs(path: Path) -> tuple[str, list[Path]]:
+async def collect_inputs(ch: Channel, path: Path) -> tuple[str, list[Path]]:
 	"""(document text, ordered image paths) from an .md file, a bare folder, or one image."""
 	if path.is_dir():
 		text = '\n\n'.join(
@@ -65,17 +66,19 @@ def collect_inputs(path: Path) -> tuple[str, list[Path]]:
 	images: list[Path] = []
 	for link in IMAGE_LINK_RE.findall(text):
 		if link.startswith(('http://', 'https://')):
-			print(f'⚠️  Skipping remote image {link} (only local files are read)')
+			await ch.log(f'⚠️  Skipping remote image {link} (only local files are read)')
 			continue
 		img = (path.parent / link).resolve()
 		if img.is_file():
 			images.append(img)
 		else:
-			print(f'⚠️  Image not found, skipping: {link}')
+			await ch.log(f'⚠️  Image not found, skipping: {link}')
 	return text, images
 
 
-def build_messages(text: str, images: list[Path], current_appmap: dict[str, str]) -> list[BaseMessage]:
+async def build_messages(
+	ch: Channel, text: str, images: list[Path], current_appmap: dict[str, str]
+) -> list[BaseMessage]:
 	parts: list[ContentPartTextParam | ContentPartImageParam] = []
 	if current_appmap:
 		existing = '\n\n'.join(
@@ -85,12 +88,12 @@ def build_messages(text: str, images: list[Path], current_appmap: dict[str, str]
 	parts.append(ContentPartTextParam(text=f'The annotated document:\n\n{text or "(no text - screenshots only)"}'))
 
 	if len(images) > MAX_IMAGES:
-		print(f'⚠️  {len(images)} images; using the first {MAX_IMAGES}')
+		await ch.log(f'⚠️  {len(images)} images; using the first {MAX_IMAGES}')
 		images = images[:MAX_IMAGES]
 	for img in images:
 		data = img.read_bytes()
 		if len(data) > MAX_IMAGE_BYTES:
-			print(f'⚠️  {img.name} is {len(data) // 1_000_000}MB (>4MB), skipping')
+			await ch.log(f'⚠️  {img.name} is {len(data) // 1_000_000}MB (>4MB), skipping')
 			continue
 		media = MEDIA_TYPES[img.suffix.lower()]
 		parts.append(ContentPartTextParam(text=f'Screenshot file: {img.name}'))
@@ -102,34 +105,35 @@ def build_messages(text: str, images: list[Path], current_appmap: dict[str, str]
 	return [SystemMessage(content=INGEST_SYSTEM), UserMessage(content=parts)]
 
 
-async def learn(ws: Workspace, config: Config, path_str: str) -> int:
+async def learn(ws: Workspace, config: Config, ch: Channel, path_str: str) -> int:
 	path = Path(path_str).expanduser().resolve()
 	if not path.exists():
-		print(f'No such file or folder: {path}')
+		await ch.log(f'No such file or folder: {path}')
 		return 2
-	text, images = collect_inputs(path)
+	text, images = await collect_inputs(ch, path)
 	if not text and not images:
-		print(f'Nothing to ingest in {path} (no markdown, no images).')
+		await ch.log(f'Nothing to ingest in {path} (no markdown, no images).')
 		return 2
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
-		print("qa learn needs a real (multimodal) model: set models.planner in config.yaml (e.g. 'smart').")
+		await ch.log("qa learn needs a real (multimodal) model: set models.planner in config.yaml (e.g. 'smart').")
 		return 2
 
-	print(f'📚 Ingesting {path.name}: {len(text)} chars of text, {len(images)} screenshot(s)...')
-	response = await llm.ainvoke(build_messages(text, images, appmap.read_all(ws)), output_format=AppmapUpdate)
+	await ch.log(f'📚 Ingesting {path.name}: {len(text)} chars of text, {len(images)} screenshot(s)...')
+	messages = await build_messages(ch, text, images, appmap.read_all(ws))
+	response = await llm.ainvoke(messages, output_format=AppmapUpdate)
 	update = response.completion
 
 	written = appmap.apply(ws, update, f'appmap: learned from {path.name}')
 	for f in written:
-		print(f'🗺️  appmap/{f}')
+		await ch.emit(Event('artifact', f'🗺️  appmap/{f}', {'appmap': f}))
 	if update.notes:
-		print(f'\n🗒️  Open questions: {update.notes}')
+		await ch.log(f'\n🗒️  Open questions: {update.notes}')
 	if written:
 		committed = ' (git-committed)' if appmap.in_git_repo(ws) else ''
-		print(
+		await ch.log(
 			f'\n{len(written)} appmap file(s) updated{committed}. Review:  git diff appmap/  ·  Plan:  qa plan "<ask>"'
 		)
 	else:
-		print('The document produced no appmap changes.')
+		await ch.log('The document produced no appmap changes.')
 	return 0

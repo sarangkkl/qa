@@ -9,3 +9,8 @@ knowledge
 scenarios
 runs
 .qa_history
+
+# PyInstaller output from the sidecar build (see desktop/src-tauri/binaries/README.md)
+build/
+dist/
+*.spec

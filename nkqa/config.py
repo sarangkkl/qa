@@ -1,5 +1,6 @@
 """config.yaml loading. Missing file or keys fall back to prototype-equivalent defaults."""
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,128 @@ appmap:
 # jira:
 #   project: PROJ   # default project key for `qa file-bug`
 """
+
+
+def render_template(app_name: str = '', base_url: str = '') -> str:
+	"""CONFIG_TEMPLATE with the two app placeholders filled in. No arguments = unchanged.
+
+	The value is quoted with json.dumps because YAML 1.2 is a JSON superset: an app name
+	like `Acme: The Shop` or `#1 Store` would otherwise break the document, and the bare
+	words `yes`/`no`/`on` would parse as booleans. Anchored on the whole `key: value` pair
+	so it cannot match a comment further down the file.
+	"""
+	text = CONFIG_TEMPLATE
+	if app_name:
+		text = text.replace('name: My App', f'name: {json.dumps(app_name)}', 1)
+	if base_url:
+		text = text.replace('base_url: https://example.com', f'base_url: {json.dumps(base_url)}', 1)
+	return text
+
+
+def _block_span(lines: list[str], name: str) -> tuple[int, int]:
+	"""Where a top-level `name:` block's body starts and ends, or (-1, -1) if there is none.
+
+	A line at column zero ends the block, and that includes a comment - which is what keeps the
+	commented-out `# mcp:` example in the template from being mistaken for the real thing.
+	"""
+	start = -1
+	for i, line in enumerate(lines):
+		stripped = line.strip()
+		top_level = line[:1] not in (' ', '\t') and stripped != ''
+		if start >= 0 and top_level:
+			return start + 1, i
+		if top_level and stripped.split('#', 1)[0].rstrip() == f'{name}:':
+			start = i
+	return (start + 1, len(lines)) if start >= 0 else (-1, -1)
+
+
+def set_aliases(text: str, updates: dict[str, str]) -> str:
+	"""Rewrite values in config.yaml's top-level `aliases:` block, leaving the rest byte-identical.
+
+	A round-trip through yaml.safe_dump would be five lines instead of thirty, and would throw
+	away every comment in the file - including the ones telling you what each role is for. The
+	settings page edits two values; it has no business reformatting a file the user also edits
+	by hand.
+
+	Values are quoted with json.dumps for the same reason render_template does it: YAML 1.2 is
+	a JSON superset, so this is always valid and never depends on the model id being free of
+	characters YAML treats as structure.
+	"""
+	lines = text.splitlines()
+	body, end = _block_span(lines, 'aliases')
+	pending = dict(updates)
+	trailing = '\n' if text.endswith('\n') else ''
+
+	if body < 0:  # no aliases block at all - add one
+		return '\n'.join([*lines, '', 'aliases:', *(f'  {k}: {json.dumps(v)}' for k, v in pending.items())]) + '\n'
+
+	out = list(lines)
+	for i in range(body, end):
+		stripped = out[i].strip()
+		if not stripped or stripped.startswith('#'):
+			continue
+		key = stripped.split(':', 1)[0].strip()
+		if key in pending:
+			indent = out[i][: len(out[i]) - len(out[i].lstrip())]
+			out[i] = f'{indent}{key}: {json.dumps(pending.pop(key))}'
+	if pending:
+		out[body:body] = [f'  {k}: {json.dumps(v)}' for k, v in pending.items()]
+	return '\n'.join(out) + trailing
+
+
+# The official Atlassian remote MCP, bridged to stdio. Same spec as docs/ARCHITECTURE.md.
+JIRA_MCP_COMMAND = 'npx'
+JIRA_MCP_ARGS = ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
+
+
+def add_mcp_server(text: str, name: str, command: str, args: list[str]) -> str:
+	"""Add a server under the top-level `mcp:` block, creating the block if there is not one.
+
+	Idempotent by design: a server already listed is left exactly as it is. Someone may have
+	tuned its args or set `expose_to_executor` by hand, and pressing Connect again is not a
+	reason to undo that.
+	"""
+	lines = text.splitlines()
+	body, end = _block_span(lines, 'mcp')
+	# expose_to_executor is deliberately not written: config.load defaults it to False for
+	# jira, which is what stops the testing agent filing bugs on its own. Spelling it out here
+	# would make a safety default look like an ordinary setting.
+	entry = [f'  {name}:', f'    command: {json.dumps(command)}', f'    args: {json.dumps(args)}']
+	trailing = '\n' if text.endswith('\n') else ''
+
+	if body < 0:
+		return '\n'.join([*lines, '', 'mcp:', *entry]) + '\n'
+	for i in range(body, end):
+		stripped = lines[i].strip()
+		if not stripped.startswith('#') and stripped.split(':', 1)[0].strip() == name:
+			return text
+	out = list(lines)
+	out[body:body] = entry
+	return '\n'.join(out) + trailing
+
+
+def set_jira_project(text: str, key: str) -> str:
+	"""Set `jira.project`, the default project key for `qa file-bug`.
+
+	Its own top-level block, NOT a field of `mcp.jira` - that is where `load()` reads it from
+	and where `file_bug` looks. Putting it in the wrong place parses fine and then fails only
+	when someone tries to file a bug.
+	"""
+	lines = text.splitlines()
+	body, end = _block_span(lines, 'jira')
+	trailing = '\n' if text.endswith('\n') else ''
+
+	if body < 0:
+		return '\n'.join([*lines, '', 'jira:', f'  project: {json.dumps(key)}']) + '\n'
+	out = list(lines)
+	for i in range(body, end):
+		stripped = out[i].strip()
+		if not stripped.startswith('#') and stripped.split(':', 1)[0].strip() == 'project':
+			indent = out[i][: len(out[i]) - len(out[i].lstrip())]
+			out[i] = f'{indent}project: {json.dumps(key)}'
+			return '\n'.join(out) + trailing
+	out[body:body] = [f'  project: {json.dumps(key)}']
+	return '\n'.join(out) + trailing
 
 
 @dataclass

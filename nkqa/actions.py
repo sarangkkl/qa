@@ -1,7 +1,9 @@
-"""The verbs both front-ends call: the argparse CLI and the interactive shell.
+"""The verbs every front-end calls: the argparse CLI, the interactive shell, the sidecar.
 
 Everything here returns a process-style exit code (0 ok, 1 failure, 2 usage/not-found)
-so the CLI can exit with it and the shell can report it.
+so the CLI can exit with it and the other surfaces can report it. Nothing here prints:
+output goes to the Channel it is handed, which is what lets the same verb serve a
+terminal and a window.
 """
 
 import asyncio
@@ -20,6 +22,8 @@ from nkqa import workspace as workspace_mod
 from nkqa.config import Config
 from nkqa.config import MCPServer as MCPServerSpec
 from nkqa.hitl import HumanInTheLoop
+from nkqa.stop import StopSignal, interruptible
+from nkqa.ui import Channel, Event, TerminalChannel
 from nkqa.workspace import Workspace
 
 STATUS_LABELS = {'ok': 'approved', 'draft': 'draft', 'stale': 'STALE', 'deprecated': 'deprecated'}
@@ -29,73 +33,80 @@ def _cfg(ws: Workspace, config: Config | None) -> Config:
 	return config or config_mod.load(ws.config_file)
 
 
-def _hitl(ws: Workspace, hitl: HumanInTheLoop | None) -> HumanInTheLoop:
-	return hitl or HumanInTheLoop(ws.permissions_file)
+def _hitl(ws: Workspace, hitl: HumanInTheLoop | None, ch: Channel) -> HumanInTheLoop:
+	from nkqa.vault import Vault
+
+	return hitl or HumanInTheLoop(ws.permissions_file, ch, Vault(ws))
 
 
-def init() -> int:
-	ws = workspace_mod.create(Path.cwd())
-	print(f'✅ QA workspace ready at {ws.root}')
-	print(f'   Edit {ws.config_file.name} (app URL, models), then:  qa plan "<what to test>"')
+async def init(ch: Channel, root: Path | None = None, app_name: str = '', base_url: str = '') -> int:
+	ws = workspace_mod.create(root or Path.cwd(), app_name, base_url)
+	await ch.log(f'✅ QA workspace ready at {ws.root}')
+	await ch.log(f'   Edit {ws.config_file.name} (app URL, models), then:  qa plan "<what to test>"')
 
 	old_output = ws.root / 'qa_output'
 	recordings = workspace_mod.prototype_recordings(old_output)
 	if recordings and not any(d.is_dir() for d in ws.runs_dir.iterdir()):
 		names = ', '.join(d.name for d in recordings)
-		answer = (
-			input(f'   Found old recordings in qa_output/ ({names}). Move them into runs/? [y/N]: ').strip().lower()
-		)
-		if answer == 'y':
+		if await ch.confirm(f'   Found old recordings in qa_output/ ({names}). Move them into runs/? [y/N]: '):
 			moved = workspace_mod.migrate_prototype(ws, old_output)
-			print(f'   Moved {len(moved)} recording(s) into runs/.')
+			await ch.log(f'   Moved {len(moved)} recording(s) into runs/.')
 	return 0
 
 
-def list_scenarios(ws: Workspace) -> int:
+async def list_scenarios(ws: Workspace, ch: Channel) -> int:
 	from nkqa.execution.report import last_verdict
 
 	all_scenarios = scenarios_mod.load_all(ws.scenarios_dir)
 	if not all_scenarios:
-		print('No scenarios yet. Draft some:  qa plan "<what to test>"')
+		await ch.log('No scenarios yet. Draft some:  qa plan "<what to test>"')
 		return 0
-	print(f'\n{"STATUS":<12} {"LAST RUN":<9} {"ID":<36} TITLE')
+	await ch.log(f'\n{"STATUS":<12} {"LAST RUN":<9} {"ID":<36} TITLE')
 	for s in all_scenarios:
-		print(f'{STATUS_LABELS[s.runnable()]:<12} {last_verdict(ws.runs_dir, s.id) or "-":<9} {s.id:<36} {s.title}')
-	print('\nApprove:  qa approve <id>    Run:  qa run <id>')
+		state = s.runnable()
+		verdict = last_verdict(ws.runs_dir, s.id)
+		await ch.emit(
+			Event(
+				'log',
+				f'{STATUS_LABELS[state]:<12} {verdict or "-":<9} {s.id:<36} {s.title}',
+				{'scenario': s.id, 'state': state, 'title': s.title, 'last_verdict': verdict},
+			)
+		)
+	await ch.log('\nApprove:  qa approve <id>    Run:  qa run <id>')
 	return 0
 
 
-def approve(ws: Workspace, scenario_id: str) -> int:
+async def approve(ws: Workspace, ch: Channel, scenario_id: str) -> int:
 	"""Human-only: never exposed to the chat agent."""
 	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 	if s is None:
-		print(f'No scenario "{scenario_id}". See:  qa scenarios')
+		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
 		return 2
 	state = s.runnable()
 	if state == 'ok':
-		print(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
+		await ch.log(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
 		return 0
-	print(f'\n──── {s.path} ────\n')
-	print(s.path.read_text(encoding='utf-8'))
-	print('────')
+	body = f'\n──── {s.path} ────\n\n{s.path.read_text(encoding="utf-8")}\n────'
 	if state == 'stale':
-		print(f'⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.')
-	if input(f'Approve "{s.id}" for execution? [y/N]: ').strip().lower() != 'y':
-		print('Not approved.')
+		body += f'\n⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.'
+	if not await ch.confirm(f'Approve "{s.id}" for execution? [y/N]: ', body=body):
+		await ch.log('Not approved.')
 		return 1
 	scenarios_mod.approve(s, scenarios_mod.git_identity(ws.root))
-	print(f'✅ Approved (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
+	await ch.log(f'✅ Approved (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
 	return 0
 
 
-def models() -> int:
+async def models(ch: Channel, ws: Workspace | None = None) -> int:
 	from nkqa.models import ROLES, describe_role
 
-	ws = workspace_mod.find()
+	# The caller's workspace wins. Falling back to find() is right for the CLI, which runs
+	# inside the workspace, and wrong for the sidecar, whose cwd is wherever it was launched.
+	ws = ws or workspace_mod.find()
 	cfg = config_mod.load(ws.config_file if ws else None)
 	source = str(ws.config_file) if ws else 'built-in defaults (no workspace found)'
-	print(f'\nModel setup from: {source}\n')
-	print(f'{"ROLE":<11} {"MODEL":<36} {"PROVIDER":<20} KEYS')
+	await ch.log(f'\nModel setup from: {source}\n')
+	await ch.log(f'{"ROLE":<11} {"MODEL":<36} {"PROVIDER":<20} KEYS')
 	ok = True
 	for role in ROLES:
 		name, provider, keys, missing = describe_role(cfg, role)
@@ -104,16 +115,119 @@ def models() -> int:
 			status = ' '.join(f'❌ {k}' for k in missing)
 		else:
 			status = '✅ ' + ', '.join(keys) if keys else '⚠️ unknown provider'
-		print(f'{role:<11} {name:<36} {provider:<20} {status}')
-	print('\nChange models in config.yaml (models/aliases); put keys in .env.')
+		await ch.emit(
+			Event(
+				'log',
+				f'{role:<11} {name:<36} {provider:<20} {status}',
+				{'role': role, 'model': name, 'provider': provider, 'missing': missing},
+			)
+		)
+	await ch.log('\nChange models with `qa set-model` or in config.yaml (models/aliases); put keys in .env.')
 	return 0 if ok else 1
+
+
+async def set_model(ws: Workspace, ch: Channel, provider: str = '', smart: str = '', fast: str = '') -> int:
+	"""Point the smart/fast aliases at a provider's models, in config.yaml.
+
+	It edits the two aliases, not the five roles, because that is where the choice belongs:
+	every role ships pointing at a tier, so one edit moves all of them and the smart/fast split
+	survives. A role someone has since pointed straight at a model is left alone and called out
+	- silently rewriting a line a human wrote by hand is worse than not moving it.
+
+	Writing the key is deliberately not part of this. Keys are read from the environment at
+	launch, so a key typed here would not take effect until the next one anyway, and it would
+	put a live credential on a code path whose job is editing a tracked config file.
+	"""
+	from nkqa.models import CATALOGUE, PROVIDER_LABELS, ROLES, TIERS, default_tier_models, qualify, split_model
+
+	cfg = config_mod.load(ws.config_file)
+	if not (provider or smart or fast):
+		await ch.log('Usage: qa set-model --provider anthropic|openai [--smart ID] [--fast ID]\n')
+		for name, entries in CATALOGUE.items():
+			await ch.log(f'{PROVIDER_LABELS.get(name, name)} ({name})')
+			for entry in entries:
+				await ch.log(f'  {entry["tier"]:<6} {entry["id"]:<22} {entry["label"]}')
+		await ch.log('\nAny other model id works too - it is passed to the provider as you type it.')
+		return 2
+
+	if provider and provider not in CATALOGUE:
+		await ch.log(f'❌ Unknown provider "{provider}". Use one of: {", ".join(sorted(CATALOGUE))}')
+		return 2
+	# Naming a provider alone means "move everything to it"; naming a tier narrows that.
+	picks = default_tier_models(provider) if provider else {}
+	picks |= {tier: value for tier, value in (('smart', smart), ('fast', fast)) if value}
+	try:
+		updates = {
+			tier: qualify(provider or split_model(cfg.aliases.get(tier, ''))[0], value) for tier, value in picks.items()
+		}
+	except ValueError as e:
+		await ch.log(f'❌ {e}')
+		return 2
+
+	ws.config_file.write_text(config_mod.set_aliases(ws.config_file.read_text(encoding='utf-8'), updates), 'utf-8')
+	for tier, value in updates.items():
+		await ch.emit(Event('log', f'✅ {tier} → {value}', {'alias': tier, 'model': value}))
+
+	detached = [r for r in ROLES if cfg.models.get(r, '') not in TIERS]
+	if detached:
+		await ch.log(
+			f'\n⚠️  {", ".join(detached)} point straight at a model in config.yaml, not at an alias, '
+			'so they did not move. Edit the `models:` block to bring them back.'
+		)
+	# The table is shown, but its exit code is not ours: it reports whether the keys are set,
+	# and a missing key does not mean the change failed. `qa models` answers that question.
+	await models(ch, ws)
+	return 0
+
+
+# Connectors this can set up on its own. Deliberately a fixed list and not "any command you
+# name": this path writes a command config.yaml will later execute, so it must not become a way
+# to make the product launch anything at all. Everything else stays a reviewed file edit.
+KNOWN_CONNECTORS = {'jira': (config_mod.JIRA_MCP_COMMAND, config_mod.JIRA_MCP_ARGS)}
+
+
+async def connect(ws: Workspace, ch: Channel, name: str = '', project: str = '', config: Config | None = None) -> int:
+	"""Write a connector into config.yaml. Signing in is `qa auth`, which is a separate step."""
+	name = name.strip().lower()
+	if name not in KNOWN_CONNECTORS:
+		known = ', '.join(sorted(KNOWN_CONNECTORS))
+		await ch.log(f'Usage: qa connect {known} [--project KEY]')
+		if name:
+			await ch.log(f'❌ I do not know how to set up "{name}". Add it under `mcp:` in config.yaml by hand.')
+		return 2
+
+	command, args = KNOWN_CONNECTORS[name]
+	text = ws.config_file.read_text(encoding='utf-8')
+	# The name has to be literally "jira": jira_server() looks the server up by that exact
+	# string, so anything else shows up in the UI and then breaks file-bug and plan --ticket.
+	updated = config_mod.add_mcp_server(text, name, command, args)
+	if project.strip():
+		updated = config_mod.set_jira_project(updated, project.strip().upper())
+	changed = updated != text
+	if changed:
+		ws.config_file.write_text(updated, encoding='utf-8')
+
+	cfg = config_mod.load(ws.config_file)
+	spec = cfg.mcp_server(name)
+	if spec is None:  # the write went in but did not parse back - say so rather than claim success
+		await ch.log(f'❌ {name} is still not in config.yaml after writing it. Check the file by hand.')
+		return 1
+	await ch.emit(
+		Event(
+			'log', f'{"✅ Added" if changed else "✅ Already configured:"} {name} → {spec.command}', {'connector': name}
+		)
+	)
+	if cfg.jira_project:
+		await ch.log(f'   Default project for bugs: {cfg.jira_project}')
+	await ch.log(f'\nNext, sign in:  qa auth {name}   (opens an OAuth login in your browser)')
+	return 0
 
 
 AUTH_READY = re.compile(r'connected to remote server|proxy established|already authorized', re.I)
 AUTH_CACHE = Path.home() / '.mcp-auth'
 
 
-async def _sign_in(spec: MCPServerSpec, timeout: float) -> bool:
+async def _sign_in(spec: MCPServerSpec, ch: Channel, timeout: float) -> bool:
 	"""Run the server command directly so its sign-in URL and prompts reach the user.
 
 	Needed because the MCP client's own connect() gives up after 10s - far less than a
@@ -133,12 +247,12 @@ async def _sign_in(spec: MCPServerSpec, timeout: float) -> bool:
 			if not line:
 				break
 			text = line.decode(errors='replace').rstrip()
-			print(f'   {text}')
+			await ch.log(f'   {text}')
 			if AUTH_READY.search(text):
 				ready = True
 				break
 	except TimeoutError:
-		print(f'   ⏱️  Gave up after {int(timeout)}s without a completed sign-in.')
+		await ch.log(f'   ⏱️  Gave up after {int(timeout)}s without a completed sign-in.')
 	finally:
 		process.terminate()
 		with contextlib.suppress(Exception):
@@ -146,146 +260,217 @@ async def _sign_in(spec: MCPServerSpec, timeout: float) -> bool:
 	return ready
 
 
-async def auth(ws: Workspace, server: str = '', reset: bool = False, config: Config | None = None) -> int:
+async def auth(ws: Workspace, ch: Channel, server: str = '', reset: bool = False, config: Config | None = None) -> int:
 	"""Sign in to configured MCP servers and verify their tools are reachable."""
 	from nkqa.mcp import MCPRuntime
 
 	cfg = _cfg(ws, config)
 	if not cfg.mcp_servers:
-		print('No MCP servers in config.yaml. Add one under `mcp:` (the file has a commented example).')
+		await ch.log('No MCP servers in config.yaml. Add one under `mcp:` (the file has a commented example).')
 		return 2
 	targets = [s for s in cfg.mcp_servers if not server or s.name == server]
 	if not targets:
 		known = ', '.join(s.name for s in cfg.mcp_servers)
-		print(f'No MCP server "{server}" in config.yaml. Configured: {known}')
+		await ch.log(f'No MCP server "{server}" in config.yaml. Configured: {known}')
 		return 2
 
 	if reset:
 		if not AUTH_CACHE.is_dir():
-			print(f'No cached logins at {AUTH_CACHE}.')
-		elif input(f'Delete cached MCP logins in {AUTH_CACHE}? [y/N]: ').strip().lower() != 'y':
-			print('Kept.')
+			await ch.log(f'No cached logins at {AUTH_CACHE}.')
+		elif not await ch.confirm(f'Delete cached MCP logins in {AUTH_CACHE}? [y/N]: '):
+			await ch.log('Kept.')
 			return 1
 		else:
 			shutil.rmtree(AUTH_CACHE)
-			print('🧹 Cleared cached logins - you will be asked to sign in again.')
+			await ch.log('🧹 Cleared cached logins - you will be asked to sign in again.')
 
 	ok = True
 	for spec in targets:
-		print(f'\n🔌 {spec.name}: {spec.command} {" ".join(spec.args)}')
+		await ch.log(f'\n🔌 {spec.name}: {spec.command} {" ".join(spec.args)}')
 		try:
 			async with MCPRuntime([spec]) as rt:  # already signed in? this is instant
 				tools = rt.tool_names(spec.name)
-			print(f'   ✅ connected · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
+			await ch.log(f'   ✅ connected · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
 			continue
 		except Exception:
-			print('   Sign-in needed. A browser window will open - approve access there.')
+			await ch.log('   Sign-in needed. A browser window will open - approve access there.')
 
-		if not await _sign_in(spec, timeout=300):
-			print(f'   ❌ {spec.name}: not authorized. Re-run:  qa auth {spec.name}')
+		if not await _sign_in(spec, ch, timeout=300):
+			await ch.log(f'   ❌ {spec.name}: not authorized. Re-run:  qa auth {spec.name}')
 			ok = False
 			continue
 		try:
 			async with MCPRuntime([spec]) as rt:
 				tools = rt.tool_names(spec.name)
-			print(f'   ✅ signed in · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
+			await ch.log(f'   ✅ signed in · {len(tools)} tools · e.g. {", ".join(sorted(tools)[:4])}')
 		except Exception as e:
 			ok = False
-			print(f'   ❌ {spec.name}: signed in but the connection failed: {e}')
+			await ch.log(f'   ❌ {spec.name}: signed in but the connection failed: {e}')
 	return 0 if ok else 1
 
 
-def list_runs(ws: Workspace) -> int:
+async def list_runs(ws: Workspace, ch: Channel) -> int:
 	from nkqa.execution.evidence import list_runs as _list
 
-	return _list(ws.runs_dir)
+	return await _list(ch, ws.runs_dir)
 
 
 async def plan(
-	ws: Workspace, ask: str = '', ticket: str = '', area: str = '', force: bool = False, config: Config | None = None
+	ws: Workspace,
+	ch: Channel,
+	ask: str = '',
+	ticket: str = '',
+	area: str = '',
+	force: bool = False,
+	config: Config | None = None,
 ) -> int:
+	from nkqa.jira import issue_key
 	from nkqa.planner import plan as _plan
 
 	if not ask and not ticket:
-		print('Tell me what to plan:  qa plan "<ask>"  and/or  qa plan --ticket PROJ-123')
+		await ch.log('Tell me what to plan:  qa plan "<ask>"  and/or  qa plan --ticket PROJ-123')
 		return 2
-	return await _plan(ws, _cfg(ws, config), ask, area, force, ticket)
+	if ticket:
+		key = issue_key(ticket)
+		if not key:
+			await ch.log(f'❌ No Jira issue key in "{ticket}". Give a key like PROJ-123, or its browse URL.')
+			return 2
+		ticket = key
+	return await _plan(ws, _cfg(ws, config), ch, ask, area, force, ticket)
 
 
-async def revise(ws: Workspace, scenario_id: str, instruction: str, config: Config | None = None) -> int:
+async def ticket(ws: Workspace, ch: Channel, reference: str = '', config: Config | None = None) -> int:
+	"""Read a Jira ticket and show it. Writes nothing - reading is not the same as planning.
+
+	Its own verb because the only Jira read in the product used to be buried inside
+	`plan --ticket`, where the text was hidden context for scenario generation and the side
+	effect was draft files. "What is the scope of this ticket?" had no code path at all.
+	"""
+	from nkqa.jira import issue_key, read_issue
+
+	key = issue_key(reference)
+	if not key:
+		await ch.log('Usage: qa ticket PROJ-123   (a browse URL works too)')
+		return 2
+
+	body, error = await read_issue(_cfg(ws, config), ch, key)
+	if error:
+		await ch.log(error)
+		return 2
+	await ch.emit(Event('log', f'\n### Ticket {key}\n{body}', {'ticket': key}))
+	await ch.log(f'\nDraft scenarios from it with:  qa plan --ticket {key}')
+	return 0
+
+
+async def revise(ws: Workspace, ch: Channel, scenario_id: str, instruction: str, config: Config | None = None) -> int:
 	from nkqa.revise import revise as _revise
 
-	return await _revise(ws, _cfg(ws, config), scenario_id, instruction)
+	return await _revise(ws, _cfg(ws, config), ch, scenario_id, instruction)
 
 
 async def run_scenario(
 	ws: Workspace,
+	ch: Channel,
 	scenario_id: str = '',
 	model: str | None = None,
 	config: Config | None = None,
 	hitl: HumanInTheLoop | None = None,
+	stop: StopSignal | None = None,
 ) -> int:
 	from nkqa.execution.scenario_runner import run_scenario as _run
 
 	if scenario_id.startswith(('http://', 'https://')) or '.' in scenario_id.split('/')[0]:
-		print(f'"{scenario_id}" looks like a URL. Freeform testing:  qa explore {scenario_id}')
+		await ch.log(f'"{scenario_id}" looks like a URL. Freeform testing:  qa explore {scenario_id}')
 		return 2
 	if not scenario_id:
-		return list_scenarios(ws)
+		return await list_scenarios(ws, ch)
 	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 	if s is None:
-		print(f'No scenario "{scenario_id}". See:  qa scenarios')
+		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
 		return 2
-	return await _run(ws, _cfg(ws, config), _hitl(ws, hitl), s, model)
+	return await _run(ws, _cfg(ws, config), _hitl(ws, hitl, ch), ch, s, model, stop)
 
 
 async def explore(
 	ws: Workspace,
+	ch: Channel,
 	url: str = '',
 	focus: str = '',
 	name: str = '',
 	model: str | None = None,
 	config: Config | None = None,
 	hitl: HumanInTheLoop | None = None,
+	stop: StopSignal | None = None,
 ) -> int:
 	from nkqa.execution.runner import run_freeform
 
-	return await run_freeform(ws, _cfg(ws, config), _hitl(ws, hitl), url, focus, name, model)
+	return await run_freeform(ws, _cfg(ws, config), _hitl(ws, hitl, ch), ch, url, focus, name, model, stop)
 
 
-async def learn(ws: Workspace, path: str, config: Config | None = None) -> int:
+async def correct(ws: Workspace, ch: Channel, instruction: str, config: Config | None = None) -> int:
+	from nkqa.correct import correct as _correct
+
+	return await _correct(ws, _cfg(ws, config), ch, instruction)
+
+
+async def learn(ws: Workspace, ch: Channel, path: str, config: Config | None = None) -> int:
 	from nkqa.ingest import learn as _learn
 
-	return await _learn(ws, _cfg(ws, config), path)
+	return await _learn(ws, _cfg(ws, config), ch, path)
 
 
-async def reflect(ws: Workspace, run: str, config: Config | None = None) -> int:
+async def reflect(ws: Workspace, ch: Channel, run: str, config: Config | None = None) -> int:
 	from nkqa.reflector import reflect as _reflect
 
 	run_dir = ws.runs_dir / run
 	if not run_dir.is_dir():
-		print(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
+		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
 		return 2
-	written = await _reflect(ws, _cfg(ws, config), run_dir)
-	print(f'🧠 appmap updated: {", ".join(written)}' if written else 'Nothing new learned from this run.')
+	written = await _reflect(ws, _cfg(ws, config), ch, run_dir)
+	await ch.log(f'🧠 appmap updated: {", ".join(written)}' if written else 'Nothing new learned from this run.')
 	return 0
 
 
 async def crawl(
 	ws: Workspace,
+	ch: Channel,
 	pages: int = 0,
 	model: str | None = None,
 	config: Config | None = None,
 	hitl: HumanInTheLoop | None = None,
+	stop: StopSignal | None = None,
+	refresh: bool = False,
 ) -> int:
 	from nkqa.crawler import crawl as _crawl
 
 	cfg = _cfg(ws, config)
-	return await _crawl(ws, cfg, _hitl(ws, hitl), pages or cfg.crawl_pages, model)
+	return await _crawl(ws, cfg, _hitl(ws, hitl, ch), ch, pages or cfg.crawl_pages, model, stop, refresh)
+
+
+async def suite(
+	ws: Workspace,
+	ch: Channel,
+	tag: str = '',
+	strict: bool = False,
+	model: str | None = None,
+	config: Config | None = None,
+	hitl: HumanInTheLoop | None = None,
+	stop: StopSignal | None = None,
+) -> int:
+	from nkqa.suite import run_suite
+
+	return await run_suite(ws, _cfg(ws, config), _hitl(ws, hitl, ch), ch, tag, strict, model, stop)
+
+
+async def compare(ws: Workspace, ch: Channel, first: str = '', second: str = '') -> int:
+	from nkqa.suite import compare_suites
+
+	return await compare_suites(ws, ch, first, second)
 
 
 async def replay(
 	ws: Workspace,
+	ch: Channel,
 	run: str = '',
 	all_runs: bool = False,
 	var: list[str] | None = None,
@@ -294,69 +479,98 @@ async def replay(
 	from nkqa.execution.replay import replay as _replay
 	from nkqa.execution.replay import replay_all, resolve_history_file
 
-	session_hitl = _hitl(ws, hitl)
+	session_hitl = _hitl(ws, hitl, ch)
 	if all_runs:
-		return await replay_all(ws, session_hitl, var or [])
-	history_file = resolve_history_file(ws, run)
+		return await replay_all(ws, session_hitl, ch, var or [])
+	history_file = await resolve_history_file(ws, ch, run)
 	if history_file is None:
 		return 2
-	return await _replay(ws, session_hitl, history_file, var or [])
+	return await _replay(ws, session_hitl, ch, history_file, var or [])
 
 
-async def file_bug(ws: Workspace, run: str, step: int = 0, project: str = '', config: Config | None = None) -> int:
+async def file_bug(
+	ws: Workspace, ch: Channel, run: str, step: int = 0, project: str = '', config: Config | None = None
+) -> int:
 	from nkqa.execution.report import read_results
 	from nkqa.jira import compose_bug, create_bug, failed_steps, jira_server
 	from nkqa.mcp import MCPRuntime
 
 	run_dir = ws.runs_dir / run
 	if not run_dir.is_dir():
-		print(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
+		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
 		return 2
 	record = read_results(run_dir)
 	if record is None:
-		print('This run has no results.json - only scenario runs can file bugs.')
+		await ch.log('This run has no results.json - only scenario runs can file bugs.')
 		return 2
 	scenario = scenarios_mod.find(ws.scenarios_dir, record.scenario_id)
 	if scenario is None:
-		print(f'Scenario "{record.scenario_id}" no longer exists; cannot compose the bug.')
+		await ch.log(f'Scenario "{record.scenario_id}" no longer exists; cannot compose the bug.')
 		return 2
 	failures = failed_steps(record)
 	if not failures:
-		print('Every step passed in this run - nothing to file. 🎉')
+		await ch.log('Every step passed in this run - nothing to file. 🎉')
 		return 0
 	if step:
 		failures = [f for f in failures if f.step == step]
 		if not failures:
-			print(f'Step {step} did not fail in this run.')
+			await ch.log(f'Step {step} did not fail in this run.')
 			return 2
 	if len(failures) > 1:
-		print('Several steps failed - pick one with --step:')
+		await ch.log('Several steps failed - pick one with --step:')
 		for f in failures:
-			print(f'  --step {f.step}  [{f.verdict}] {f.note[:100]}')
+			await ch.log(f'  --step {f.step}  [{f.verdict}] {f.note[:100]}')
 		return 2
 	failure = failures[0]
 
 	cfg = _cfg(ws, config)
 	project = project or cfg.jira_project
 	if not project:
-		print('No Jira project key: pass --project KEY or set jira.project in config.yaml.')
+		await ch.log('No Jira project key: pass --project KEY or set jira.project in config.yaml.')
 		return 2
 	spec = jira_server(cfg)
 
 	summary, description = compose_bug(scenario, record, failure, run_dir, cfg.base_url)
-	print(f'\n──── bug preview ({project}) ────\n\n{summary}\n\n{description}\n\n────')
-	if input('File this bug? [y/N]: ').strip().lower() != 'y':
-		print('Not filed.')
+	preview = f'\n──── bug preview ({project}) ────\n\n{summary}\n\n{description}\n\n────'
+	if not await ch.confirm('File this bug? [y/N]: ', body=preview):
+		await ch.log('Not filed.')
 		return 1
 
 	async with MCPRuntime([spec]) as rt:
 		key = await create_bug(rt, spec, project, summary, description)
 	with (run_dir / 'results.md').open('a', encoding='utf-8') as fh:
 		fh.write(f'\nFiled: {key} ({datetime.now():%Y-%m-%d %H:%M})\n')
-	print(f'🐞 Filed {key}. Recorded in {run_dir / "results.md"}.')
+	await ch.log(f'🐞 Filed {key}. Recorded in {run_dir / "results.md"}.')
 	return 0
 
 
-def run_sync(coro: Coroutine[Any, Any, int]) -> int:
-	"""Run an async action from the synchronous CLI."""
-	return asyncio.run(coro)
+async def vault(ws: Workspace, ch: Channel, action: str = 'status', name: str = '', scenario: str = '') -> int:
+	"""`qa vault <action>` - one entry point over the same handlers the shell registers."""
+	from nkqa.hitl import HumanInTheLoop
+	from nkqa.shell.commands import REGISTRY, ShellContext
+	from nkqa.vault import Vault
+
+	command = REGISTRY.get('vault' if action == 'status' else f'vault-{action}')
+	if command is None:
+		await ch.log(f'Unknown vault action "{action}".')
+		return 2
+	ctx = ShellContext(
+		ws=ws,
+		config=config_mod.load(ws.config_file),
+		hitl=HumanInTheLoop(ws.permissions_file, ch, Vault(ws)),
+		channel=ch,
+	)
+	return await command.handler(ctx, {'name': name, 'scenario': scenario})
+
+
+def run_sync(coro: Coroutine[Any, Any, int], stop: StopSignal | None = None) -> int:
+	"""Run an async action from the synchronous CLI, with a Ctrl+C that works.
+
+	Pass the same StopSignal the action got: cancelling the task alone leaves the browser
+	agent to notice on its own schedule, and until it does, Ctrl+C looks ignored.
+	"""
+	return asyncio.run(interruptible(coro, stop))
+
+
+def terminal() -> Channel:
+	return TerminalChannel()

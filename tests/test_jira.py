@@ -95,3 +95,82 @@ def test_cli_file_bug_guards(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 	# missing project key
 	assert run_cli(monkeypatch, ['file-bug', run_dir.name]) == 2
 	assert config_mod.load(ws.config_file).jira_project == ''
+
+
+@pytest.mark.parametrize(
+	('given', 'want'),
+	[
+		('https://slrconsulting.atlassian.net/browse/PNY-3689', 'PNY-3689'),
+		('https://x.atlassian.net/browse/PNY-3689?focus=comment-1', 'PNY-3689'),
+		('PNY-3689', 'PNY-3689'),
+		('pny-3689', 'PNY-3689'),
+		('can you plan scenarios for PNY-3689 please', 'PNY-3689'),
+		('AB1-42', 'AB1-42'),
+		('', ''),
+		('no ticket here', ''),
+		('https://slrconsulting.atlassian.net/jira/software/projects', ''),
+	],
+)
+def test_issue_key(given: str, want: str) -> None:
+	"""People paste the URL, because that is what Jira hands them.
+
+	fetch_issue sends this string as `issueIdOrKey` and then checks the key comes back in the
+	reply, so a URL failed twice over - and the Scenarios field's toUpperCase() turned one into
+	HTTPS://.../BROWSE/PNY-3689.
+	"""
+	from nkqa.jira import issue_key
+
+	assert issue_key(given) == want
+
+
+def test_summarize_issue_keeps_what_a_qa_needs() -> None:
+	"""getJiraIssue returns the whole REST payload - avatars, self links, expand strings."""
+	from nkqa.jira import summarize_issue
+
+	raw = json.dumps(
+		{
+			'key': 'PNY-3689',
+			'self': 'https://api.atlassian.com/ex/jira/abc/rest/api/3/issue/24873',
+			'expand': 'renderedFields,names,schema,operations',
+			'fields': {
+				'summary': 'Competitive Bid & AI Solution fields',
+				'issuetype': {'name': 'Story', 'iconUrl': 'https://…/avatar/10315', 'avatarId': 10315},
+				'status': {'name': 'In Progress'},
+				'description': '# Objective\nCapture both fields.\n# Acceptance Criteria\n1. Persisted.',
+			},
+		}
+	)
+	out = summarize_issue(raw)
+
+	assert 'PNY-3689' in out and 'Competitive Bid' in out
+	assert 'Story' in out and 'In Progress' in out
+	assert 'Acceptance Criteria' in out
+	assert 'avatarId' not in out and 'expand' not in out, 'the noise must not reach the model'
+
+
+def test_summarize_issue_reads_the_adf_description_shape() -> None:
+	"""Jira's v3 API often returns a document tree rather than markdown text."""
+	from nkqa.jira import summarize_issue
+
+	raw = json.dumps(
+		{
+			'key': 'AB-1',
+			'fields': {
+				'summary': 'Thing',
+				'description': {
+					'type': 'doc',
+					'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': 'Acceptance: it works.'}]}],
+				},
+			},
+		}
+	)
+	assert 'Acceptance: it works.' in summarize_issue(raw)
+
+
+def test_summarize_issue_falls_back_to_raw() -> None:
+	"""Never lose the ticket because the shape was not what we expected."""
+	from nkqa.jira import summarize_issue
+
+	assert summarize_issue('PNY-1 plain text reply') == 'PNY-1 plain text reply'
+	assert summarize_issue('{not json at all') == '{not json at all'
+	assert 'no description' in summarize_issue(json.dumps({'key': 'A-1', 'fields': {'summary': 'x'}}))

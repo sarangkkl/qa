@@ -2,11 +2,13 @@
 
 import re
 import shutil
+import uuid
 from pathlib import Path
 
-from nkqa.config import CONFIG_TEMPLATE
+from nkqa.config import render_template
 
 CONFIG_FILE = 'config.yaml'
+VAULT_FILE = 'vault.yaml'
 
 OVERVIEW_STUB = """\
 # App overview
@@ -25,6 +27,7 @@ OVERVIEW_STUB = """\
 GITIGNORE = """\
 .env
 runs/*/videos/
+.nkqa/
 """
 
 
@@ -38,37 +41,72 @@ class Workspace:
 	def __init__(self, root: Path):
 		self.root = root.resolve()
 		self.config_file = self.root / CONFIG_FILE
+		self.vault_file = self.root / VAULT_FILE
 		self.appmap_dir = self.root / 'appmap'
 		self.scenarios_dir = self.root / 'scenarios'
 		self.runs_dir = self.root / 'runs'
+		self.chats_dir = self.root / 'chats'  # committed: the reasoning behind a scenario is reviewable
 		self.permissions_file = self.root / 'qa_permissions.json'
+		self.local_dir = self.root / '.nkqa'  # gitignored: machine-local, never shared
 
 	def run_dir(self, name: str) -> Path:
 		return self.runs_dir / slugify(name)
+
+	def identity(self) -> str:
+		"""Stable id for this checkout, so two clones on one machine keep separate secrets.
+
+		Lives in the gitignored .nkqa/, so cloning the repo never inherits someone else's
+		keychain entries - it just reports the credentials as not yet set.
+		"""
+		id_file = self.local_dir / 'id'
+		if id_file.is_file():
+			existing = id_file.read_text(encoding='utf-8').strip()
+			if existing:
+				return existing
+		self.local_dir.mkdir(parents=True, exist_ok=True)
+		fresh = uuid.uuid4().hex
+		id_file.write_text(fresh, encoding='utf-8')
+		return fresh
+
+
+def at(root: Path) -> Workspace | None:
+	"""This exact directory, without the walk-up. What "is *this* folder a workspace?" means."""
+	candidate = root.resolve()
+	if (candidate / CONFIG_FILE).is_file() and (candidate / 'appmap').is_dir():
+		return Workspace(candidate)
+	return None
 
 
 def find(start: Path | None = None) -> Workspace | None:
 	"""Walk up from start (default cwd) looking for a workspace, like git finds .git."""
 	current = (start or Path.cwd()).resolve()
 	for candidate in (current, *current.parents):
-		if (candidate / CONFIG_FILE).is_file() and (candidate / 'appmap').is_dir():
-			return Workspace(candidate)
+		found = at(candidate)
+		if found is not None:
+			return found
 	return None
 
 
-def create(root: Path) -> Workspace:
+def create(root: Path, app_name: str = '', base_url: str = '') -> Workspace:
 	"""Create the workspace layout in root. Idempotent; never overwrites existing files."""
 	ws = Workspace(root)
 	ws.appmap_dir.mkdir(parents=True, exist_ok=True)
 	ws.scenarios_dir.mkdir(exist_ok=True)
 	ws.runs_dir.mkdir(exist_ok=True)
+	ws.chats_dir.mkdir(exist_ok=True)
 	if not ws.config_file.exists():
-		ws.config_file.write_text(CONFIG_TEMPLATE)
+		ws.config_file.write_text(render_template(app_name, base_url))
+	if not ws.vault_file.exists():
+		from nkqa.vault import VAULT_TEMPLATE
+
+		ws.vault_file.write_text(VAULT_TEMPLATE)
+	ws.local_dir.mkdir(exist_ok=True)
 	overview = ws.appmap_dir / 'overview.md'
 	if not overview.exists():
 		overview.write_text(OVERVIEW_STUB)
 	(ws.scenarios_dir / '.gitkeep').touch()
 	(ws.runs_dir / '.gitkeep').touch()
+	(ws.chats_dir / '.gitkeep').touch()
 	gitignore = ws.root / '.gitignore'
 	if not gitignore.exists():
 		gitignore.write_text(GITIGNORE)

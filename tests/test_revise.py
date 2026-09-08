@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import FakeChannel
 
 from nkqa import revise as revise_mod
 from nkqa import scenarios, workspace
@@ -37,9 +38,7 @@ def stub(monkeypatch: pytest.MonkeyPatch, revised: RevisedScenario) -> None:
 	monkeypatch.setattr(revise_mod, 'resolve_llm', fake)
 
 
-def test_revise_invalidates_approval(
-	tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_revise_invalidates_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	ws = workspace.create(tmp_path)
 	s = approved_scenario(tmp_path)
 	assert s.runnable() == 'ok'
@@ -55,18 +54,18 @@ def test_revise_invalidates_approval(
 			changes='tightened step 2',
 		),
 	)
-	assert asyncio.run(revise_mod.revise(ws, Config(), 'auth/login', 'make step 2 stricter')) == 0
+	ch = FakeChannel()
+	assert asyncio.run(revise_mod.revise(ws, Config(), ch, 'auth/login', 'make step 2 stricter')) == 0
 
 	after = scenarios.parse(s.path, ws.scenarios_dir)
 	assert after.steps[1].expect == 'dashboard shows the user name'
 	assert after.runnable() == 'stale'  # approval no longer matches the content
-	out = capsys.readouterr().out
-	assert 'tightened step 2' in out and 'Approval invalidated' in out
+	assert 'tightened step 2' in ch.out and 'Approval invalidated' in ch.out
 
 
 def test_revise_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	ws = workspace.create(tmp_path)
 	approved_scenario(tmp_path)
 	stub(monkeypatch, RevisedScenario(title='x', steps=[RevisedStep(action='y')]))
-	assert asyncio.run(revise_mod.revise(ws, Config(), 'no/such', 'do it')) == 2
-	assert asyncio.run(revise_mod.revise(ws, Config(), 'auth/login', '   ')) == 2
+	assert asyncio.run(revise_mod.revise(ws, Config(), FakeChannel(), 'no/such', 'do it')) == 2
+	assert asyncio.run(revise_mod.revise(ws, Config(), FakeChannel(), 'auth/login', '   ')) == 2

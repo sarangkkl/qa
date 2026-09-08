@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from nkqa import actions
 from nkqa import workspace as workspace_mod
+from nkqa.stop import StopSignal
 from nkqa.workspace import Workspace
 
 
@@ -14,7 +15,9 @@ def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(prog='qa', description=__doc__)
 	sub = parser.add_subparsers(dest='command')
 
-	sub.add_parser('init', help='create a QA workspace in the current directory')
+	init = sub.add_parser('init', help='create a QA workspace in the current directory')
+	init.add_argument('--app-name', default='', help='app name to write into config.yaml')
+	init.add_argument('--base-url', default='', help='base URL to write into config.yaml')
 	sub.add_parser('chat', help='interactive session (same as running `qa` with no arguments)')
 
 	plan = sub.add_parser('plan', help='draft test scenarios from app knowledge (no browser)')
@@ -48,9 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
 	reflect = sub.add_parser('reflect', help='update the appmap from a past run (auto after runs by default)')
 	reflect.add_argument('run', help='run dir name under runs/')
 
+	correct = sub.add_parser('correct', help='fix what the app map gets wrong, in your own words')
+	correct.add_argument('instruction', nargs='+', help='what is actually true')
+
 	crawl = sub.add_parser('crawl', help='explore the live app read-only and enrich the appmap (optional)')
 	crawl.add_argument('--pages', type=int, default=0, help='page budget (default: appmap.crawl_pages)')
 	crawl.add_argument('--model', default=None, metavar='MODEL', help='executor model override')
+	crawl.add_argument('--refresh', action='store_true', help='re-map pages already documented (the app changed)')
 
 	bug = sub.add_parser('file-bug', help='file a Jira bug from a failed run (human-instructed only)')
 	bug.add_argument('run', help='run dir name under runs/, e.g. checkout-coupon--20260826-2238')
@@ -62,12 +69,44 @@ def build_parser() -> argparse.ArgumentParser:
 	replay.add_argument('--all', action='store_true', help='replay every recorded run (CI mode)')
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
 
+	ticket = sub.add_parser('ticket', help='read a Jira ticket and show it (no scenarios written)')
+	ticket.add_argument('id', help='issue key like PROJ-123, or its browse URL')
+
+	connect = sub.add_parser('connect', help='set up a connector in config.yaml (jira), then sign in with qa auth')
+	connect.add_argument('name', nargs='?', default='', help='connector to set up, e.g. jira')
+	connect.add_argument('--project', default='', metavar='KEY', help='default Jira project key for filing bugs')
+
 	auth = sub.add_parser('auth', help='sign in to configured MCP servers (Jira) and verify them')
 	auth.add_argument('server', nargs='?', default='', help='server name from config.yaml mcp: (default: all)')
 	auth.add_argument('--reset', action='store_true', help='clear cached logins and sign in again')
 
+	vault = sub.add_parser('vault', help='credentials this project needs (status, set, rm, grant, revoke)')
+	vault.add_argument(
+		'action',
+		nargs='?',
+		default='status',
+		choices=['status', 'set', 'rm', 'grant', 'revoke'],
+		help='default: status',
+	)
+	vault.add_argument('name', nargs='?', default='', help='credential name')
+	vault.add_argument('--scenario', default='', metavar='ID', help='limit a grant to one scenario')
+
+	suite = sub.add_parser('suite', help='run every approved scenario and report like CI')
+	suite.add_argument('--tag', default='', metavar='TAG', help='only scenarios carrying this tag')
+	suite.add_argument('--strict', action='store_true', help='also fail when a scenario is excluded (draft or STALE)')
+	suite.add_argument('--model', default=None, metavar='MODEL', help='executor model override')
+
+	compare = sub.add_parser('compare', help='what changed between two suite runs')
+	compare.add_argument('first', nargs='?', default='', help='older suite run name (default: second newest)')
+	compare.add_argument('second', nargs='?', default='', help='newer suite run name (default: newest)')
+
 	sub.add_parser('list', help='list all recorded runs')
 	sub.add_parser('models', help='show model roles, providers, and whether their API keys are set')
+
+	set_model = sub.add_parser('set-model', help='choose the provider and models config.yaml uses')
+	set_model.add_argument('--provider', default='', metavar='NAME', help='anthropic | openai')
+	set_model.add_argument('--smart', default='', metavar='ID', help='model for planning and revising')
+	set_model.add_argument('--fast', default='', metavar='ID', help='model for executing, reflecting, chat')
 	sub.add_parser('version', help='show nkqa and browser-use versions')
 	return parser
 
@@ -85,6 +124,8 @@ def main() -> None:
 	args = build_parser().parse_args()
 	command = args.command
 
+	ch = actions.terminal()
+
 	if command is None or command == 'chat':
 		from nkqa.shell.session import start
 
@@ -95,37 +136,54 @@ def main() -> None:
 		print(f'nkqa {pkg_version("nkqa")} (browser-use {pkg_version("browser-use")})')
 		sys.exit(0)
 	if command == 'init':
-		sys.exit(actions.init())
+		sys.exit(actions.run_sync(actions.init(ch, None, args.app_name, args.base_url)))
 	if command == 'models':
-		sys.exit(actions.models())
+		sys.exit(actions.run_sync(actions.models(ch)))
 
 	ws = require_workspace()
 	if command == 'scenarios':
-		sys.exit(actions.list_scenarios(ws))
+		sys.exit(actions.run_sync(actions.list_scenarios(ws, ch)))
 	if command == 'approve':
-		sys.exit(actions.approve(ws, args.id))
+		sys.exit(actions.run_sync(actions.approve(ws, ch, args.id)))
 	if command == 'list':
-		sys.exit(actions.list_runs(ws))
+		sys.exit(actions.run_sync(actions.list_runs(ws, ch)))
+	if command == 'set-model':
+		sys.exit(actions.run_sync(actions.set_model(ws, ch, args.provider, args.smart, args.fast)))
+	if command == 'ticket':
+		sys.exit(actions.run_sync(actions.ticket(ws, ch, args.id)))
+	if command == 'connect':
+		sys.exit(actions.run_sync(actions.connect(ws, ch, args.name, args.project)))
 	if command == 'auth':
-		sys.exit(actions.run_sync(actions.auth(ws, args.server, args.reset)))
+		sys.exit(actions.run_sync(actions.auth(ws, ch, args.server, args.reset)))
 	if command == 'plan':
-		sys.exit(actions.run_sync(actions.plan(ws, args.ask, args.ticket, args.area, args.force)))
+		sys.exit(actions.run_sync(actions.plan(ws, ch, args.ask, args.ticket, args.area, args.force)))
 	if command == 'revise':
-		sys.exit(actions.run_sync(actions.revise(ws, args.id, args.instruction)))
+		sys.exit(actions.run_sync(actions.revise(ws, ch, args.id, args.instruction)))
 	if command == 'run':
-		sys.exit(actions.run_sync(actions.run_scenario(ws, args.id, args.model)))
+		sys.exit(actions.run_sync(actions.run_scenario(ws, ch, args.id, args.model)))
 	if command == 'explore':
-		sys.exit(actions.run_sync(actions.explore(ws, args.url, args.focus, args.name, args.model)))
+		sys.exit(actions.run_sync(actions.explore(ws, ch, args.url, args.focus, args.name, args.model)))
 	if command == 'learn':
-		sys.exit(actions.run_sync(actions.learn(ws, args.path)))
+		sys.exit(actions.run_sync(actions.learn(ws, ch, args.path)))
 	if command == 'reflect':
-		sys.exit(actions.run_sync(actions.reflect(ws, args.run)))
+		sys.exit(actions.run_sync(actions.reflect(ws, ch, args.run)))
+	if command == 'correct':
+		sys.exit(actions.run_sync(actions.correct(ws, ch, ' '.join(args.instruction))))
 	if command == 'crawl':
-		sys.exit(actions.run_sync(actions.crawl(ws, args.pages, args.model)))
+		# The signal is shared with the action so the first Ctrl+C reaches the browser agent
+		# itself, not just the task wrapping it. A crawl is the longest thing `qa` runs.
+		stop = StopSignal()
+		sys.exit(actions.run_sync(actions.crawl(ws, ch, args.pages, args.model, stop=stop, refresh=args.refresh), stop))
 	if command == 'file-bug':
-		sys.exit(actions.run_sync(actions.file_bug(ws, args.run, args.step, args.project)))
+		sys.exit(actions.run_sync(actions.file_bug(ws, ch, args.run, args.step, args.project)))
+	if command == 'suite':
+		sys.exit(actions.run_sync(actions.suite(ws, ch, args.tag, args.strict, args.model)))
+	if command == 'compare':
+		sys.exit(actions.run_sync(actions.compare(ws, ch, args.first, args.second)))
+	if command == 'vault':
+		sys.exit(actions.run_sync(actions.vault(ws, ch, args.action, args.name, args.scenario)))
 	if command == 'replay':
-		sys.exit(actions.run_sync(actions.replay(ws, args.name, args.all, args.var)))
+		sys.exit(actions.run_sync(actions.replay(ws, ch, args.name, args.all, args.var)))
 
 	build_parser().print_help()
 	sys.exit(2)

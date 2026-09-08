@@ -3,25 +3,28 @@ name = 'nkqa'
 version = '0.1.0'
 description = 'AI QA teammate: plans test scenarios, executes approved ones in a real browser, records evidence'
 requires-python = '>=3.13'
-dependencies = ['browser-use[video]>=0.13.8', 'pyyaml', 'python-dotenv']
+# browser-use is pinned, not floated: 0.13.10 pulls mcp 2.x, where FastMCP was renamed to
+# MCPServer - which breaks tests/fixtures/echo_mcp_server.py. Bump deliberately, not by drift.
+dependencies = ['browser-use[video]==0.13.8', 'pyyaml', 'python-dotenv', 'fastapi', 'uvicorn', 'keyring']
 
 [project.scripts]
 qa = 'nkqa.cli:main'
+nkqa-server = 'nkqa.server.main:main'
 
 [build-system]
 requires = ['setuptools>=77']
 build-backend = 'setuptools.build_meta'
 
 [tool.setuptools]
-packages = ['nkqa', 'nkqa.execution']
+packages = ['nkqa', 'nkqa.execution', 'nkqa.server']
 
 [dependency-groups]
-dev = ['ruff', 'pyright', 'pytest']
+dev = ['ruff', 'pyright', 'pytest', 'httpx', 'pyinstaller']
 
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ['venv', 'kt', 'qa_output']
+extend-exclude = ['venv', 'kt', 'qa_output', 'spikes', 'dist', 'build']
 
 [tool.ruff.format]
 quote-style = 'single'

@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import FakeChannel
 
 from nkqa import ingest, workspace
 from nkqa.appmap import AppmapUpdate, FileUpdate
@@ -19,26 +20,27 @@ def make_doc(tmp_path: Path) -> Path:
 	return doc
 
 
-def test_collect_inputs_from_md(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_collect_inputs_from_md(tmp_path: Path) -> None:
 	doc = make_doc(tmp_path)
-	text, images = ingest.collect_inputs(doc)
+	ch = FakeChannel()
+	text, images = asyncio.run(ingest.collect_inputs(ch, doc))
 	assert 'Email + OTP.' in text
 	assert [i.name for i in images] == ['login.png']  # missing one skipped with a warning
-	assert 'missing.png' in capsys.readouterr().out
+	assert 'missing.png' in ch.out
 
 
 def test_collect_inputs_from_folder(tmp_path: Path) -> None:
 	(tmp_path / 'shots').mkdir()
 	(tmp_path / 'shots' / 'a.png').write_bytes(PNG)
 	(tmp_path / 'shots' / 'notes.md').write_text('the dashboard is slow')
-	text, images = ingest.collect_inputs(tmp_path / 'shots')
+	text, images = asyncio.run(ingest.collect_inputs(FakeChannel(), tmp_path / 'shots'))
 	assert 'slow' in text and [i.name for i in images] == ['a.png']
 
 
 def test_build_messages_shape(tmp_path: Path) -> None:
 	doc = make_doc(tmp_path)
-	text, images = ingest.collect_inputs(doc)
-	messages = ingest.build_messages(text, images, {'overview.md': '# existing'})
+	text, images = asyncio.run(ingest.collect_inputs(FakeChannel(), doc))
+	messages = asyncio.run(ingest.build_messages(FakeChannel(), text, images, {'overview.md': '# existing'}))
 	user = messages[1]
 	parts: list[Any] = list(user.content)  # type: ignore[arg-type]
 	kinds = [p.type for p in parts]
@@ -65,7 +67,7 @@ def test_learn_end_to_end_with_stub_llm(tmp_path: Path, monkeypatch: pytest.Monk
 		return StubLLM()
 
 	monkeypatch.setattr(ingest, 'resolve_llm', stub_resolve)
-	assert asyncio.run(ingest.learn(ws, Config(), str(doc))) == 0
+	assert asyncio.run(ingest.learn(ws, Config(), FakeChannel(), str(doc))) == 0
 	assert (ws.appmap_dir / 'pages' / 'login.md').read_text() == '# Login\nEmail + OTP.\n'
 
-	assert asyncio.run(ingest.learn(ws, Config(), str(tmp_path / 'nope.md'))) == 2
+	assert asyncio.run(ingest.learn(ws, Config(), FakeChannel(), str(tmp_path / 'nope.md'))) == 2
