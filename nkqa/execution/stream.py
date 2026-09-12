@@ -73,6 +73,14 @@ def secret_values(secrets: Mapping[str, Any] | None) -> list[str]:
 	return [v for v in found if v]
 
 
+def redact(text: str, secrets: Mapping[str, Any] | None) -> str:
+	"""Every live credential value replaced, for text that leaves the process any other way
+	than the narration feed below - a page can echo a password back in its DOM or its URL."""
+	for value in secret_values(secrets):
+		text = text.replace(value, '[secret]')
+	return text
+
+
 async def _pump(ch: Channel, queue: 'asyncio.Queue[str | None]', secrets: Mapping[str, Any] | None) -> None:
 	while True:
 		line = await queue.get()

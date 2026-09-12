@@ -148,7 +148,7 @@ def test_registry_covers_the_cli_surface() -> None:
 	parser = build_parser()
 	cli_commands = set(parser._subparsers._group_actions[0].choices)  # type: ignore[union-attr]
 	shell_only = {'help', 'exit', 'forget'}
-	cli_only = {'init', 'version', 'chat'}
+	cli_only = {'init', 'version', 'chat', 'mcp'}  # mcp serves the registry's job to another agent; it is not a verb
 	# A per-session stance has no meaning in a one-shot `qa <cmd>` process, which exits before
 	# it could matter. The bar for adding to this set is that high - if a command could
 	# sensibly be typed at a terminal, it belongs in the CLI too.

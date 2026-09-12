@@ -71,7 +71,8 @@
       "Bash(cp nkqa/models.py /tmp/models.py.bak)",
       "Bash(venv/bin/pytest tests/test_model_settings.py -q)",
       "Bash(grep -vE \"^\\\\s*#|^\\\\s*$\" /Users/gaurav/Documents/slrtesting/config.yaml)",
-      "Bash(xargs kill)"
+      "Bash(xargs kill)",
+      "Bash(venv/bin/pytest tests/test_mcp_server.py::test_every_tool_documents_itself -q -vv)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",

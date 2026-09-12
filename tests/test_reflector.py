@@ -38,6 +38,27 @@ def test_run_facts(tmp_path: Path) -> None:
 	assert 'Steps executed: 3' in facts
 
 
+def test_run_facts_from_a_driver_step_log(tmp_path: Path) -> None:
+	"""A run the MCP driver recorded has steps.json and no history.json; the facts are the same shape."""
+	run_dir = tmp_path / 'runs' / 'mcp--20260910-1200'
+	run_dir.mkdir(parents=True)
+	(run_dir / 'steps.json').write_text(
+		json.dumps(
+			{
+				'steps': [
+					{'action': 'navigate', 'url_after': 'https://shop.test/login', 'error': ''},
+					{'action': 'click', 'url_after': 'https://shop.test/cart', 'error': 'Element not found'},
+					{'action': 'state', 'url_after': 'https://shop.test/cart', 'error': ''},
+				]
+			}
+		)
+	)
+	facts = reflector.run_facts(run_dir)
+	assert 'Steps executed: 3' in facts
+	assert facts.count('shop.test/cart') == 1
+	assert 'Element not found' in facts
+
+
 class StubLLM:
 	def __init__(self, update: AppmapUpdate | Exception):
 		self.update = update

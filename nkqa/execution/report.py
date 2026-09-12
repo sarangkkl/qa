@@ -39,7 +39,17 @@ def _cell(text: str) -> str:
 	return text.replace('|', '\\|').replace('\n', ' ')
 
 
-def write_results(run_dir: Path, scenario: Scenario, result: ScenarioResult | None) -> Verdict:
+AGENT_EVIDENCE = [
+	'- [Recording (history.json)](history.json)',
+	'- [Step-by-step gif](last_run.gif)',
+	'- [Videos](videos/)',
+	'- [LLM transcript](conversation/)',
+]
+
+
+def write_results(
+	run_dir: Path, scenario: Scenario, result: ScenarioResult | None, evidence: list[str] | None = None
+) -> Verdict:
 	verdict = overall(result, len(scenario.steps))
 	when = datetime.now().strftime('%Y-%m-%d %H:%M')
 	by_index = {v.step: v for v in (result.steps if result else [])}
@@ -59,15 +69,7 @@ def write_results(run_dir: Path, scenario: Scenario, result: ScenarioResult | No
 		)
 	if result and result.summary:
 		lines += ['', '## Summary', '', result.summary]
-	lines += [
-		'',
-		'## Evidence',
-		'',
-		'- [Recording (history.json)](history.json)',
-		'- [Step-by-step gif](last_run.gif)',
-		'- [Videos](videos/)',
-		'- [LLM transcript](conversation/)',
-	]
+	lines += ['', '## Evidence', '', *(evidence if evidence is not None else AGENT_EVIDENCE)]
 	(run_dir / 'results.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 	(run_dir / 'results.json').write_text(
 		json.dumps(

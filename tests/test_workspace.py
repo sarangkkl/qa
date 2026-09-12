@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from nkqa import workspace
@@ -62,6 +63,33 @@ def test_create_is_idempotent(tmp_path: Path) -> None:
 	ws.config_file.write_text('app:\n  name: Edited\n')
 	workspace.create(tmp_path)
 	assert 'Edited' in ws.config_file.read_text()
+
+
+def test_scenario_run_dir_is_the_shape_latest_run_dir_globs(tmp_path: Path) -> None:
+	from datetime import datetime
+
+	from nkqa.execution.report import latest_run_dir
+
+	ws = workspace.create(tmp_path)
+	run_dir = ws.scenario_run_dir('auth/login', datetime(2026, 9, 10, 12, 0, 5))
+	assert run_dir == ws.runs_dir / 'auth-login--20260910-120005'
+	run_dir.mkdir()
+	(run_dir / 'results.md').write_text('# auth/login — PASS — now\n')
+	assert latest_run_dir(ws.runs_dir, 'auth/login') == run_dir
+
+
+def test_recent_workspaces_reads_the_desktop_list_and_drops_the_dead(tmp_path: Path) -> None:
+	"""The desktop app writes a JSON list of paths; folders that stopped being workspaces
+	(deleted, or never were) must not come back from here."""
+	alive = workspace.create(tmp_path / 'alive')
+	recents = tmp_path / 'workspaces.json'
+	recents.write_text(json.dumps([str(alive.root), str(tmp_path / 'gone'), 42]))
+	assert [ws.root for ws in workspace.recent_workspaces(recents)] == [alive.root]
+
+	recents.write_text('not json')
+	assert workspace.recent_workspaces(recents) == []
+	assert workspace.recent_workspaces(tmp_path / 'missing.json') == []
+	assert workspace.recents_file().name == 'workspaces.json'
 
 
 def test_migrate_prototype(tmp_path: Path) -> None:

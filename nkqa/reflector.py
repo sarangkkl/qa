@@ -37,18 +37,19 @@ def run_facts(run_dir: Path) -> str:
 		parts.append('Verdicts: ' + results.read_text(encoding='utf-8'))
 
 	history = run_dir / 'history.json'
+	step_log = run_dir / 'steps.json'
+	urls: list[str] = []
+	errors: list[str] = []
+	executed = 0
 	if history.is_file():
 		try:
 			steps: list[dict[str, Any]] = json.loads(history.read_text(encoding='utf-8')).get('history', [])
 		except (json.JSONDecodeError, OSError):
 			steps = []
-		urls: list[str] = []
-		errors: list[str] = []
+		executed = len(steps)
 		for step in steps:
 			state: dict[str, Any] = step.get('state') or {}
-			url = str(state.get('url') or '')
-			if url and url not in urls and not url.startswith('about:'):
-				urls.append(url)
+			_note_url(urls, str(state.get('url') or ''))
 			results_raw: list[Any] = step.get('result') or []
 			for r in results_raw:
 				if not isinstance(r, dict):
@@ -56,13 +57,30 @@ def run_facts(run_dir: Path) -> str:
 				error: Any = cast(dict[str, Any], r).get('error')
 				if error:
 					errors.append(str(error).splitlines()[0][:200])
-		parts.append(f'Steps executed: {len(steps)}')
+	elif step_log.is_file():
+		# The MCP driver's log: the external agent chose each action, nkqa recorded it.
+		try:
+			recorded: list[dict[str, Any]] = json.loads(step_log.read_text(encoding='utf-8')).get('steps', [])
+		except (json.JSONDecodeError, OSError):
+			recorded = []
+		executed = len(recorded)
+		for step in recorded:
+			_note_url(urls, str(step.get('url_after') or ''))
+			if step.get('error'):
+				errors.append(str(step['error']).splitlines()[0][:200])
+	if history.is_file() or step_log.is_file():
+		parts.append(f'Steps executed: {executed}')
 		if urls:
 			parts.append('Pages visited:\n' + '\n'.join(f'- {u}' for u in urls))
 		if errors:
 			parts.append('Errors seen:\n' + '\n'.join(f'- {e}' for e in errors))
 
 	return '\n\n'.join(parts)
+
+
+def _note_url(urls: list[str], url: str) -> None:
+	if url and url not in urls and not url.startswith('about:'):
+		urls.append(url)
 
 
 def _messages(ws: Workspace, facts: str) -> list[BaseMessage]:
