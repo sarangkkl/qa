@@ -93,6 +93,18 @@ def test_permission_choice_paths(tmp_path: Path) -> None:
 	assert 'DENIED' in call(hitl.build_tools(), 'request_permission', permission_key='wipe', description='wipe')
 
 
+def test_the_gates_are_callable_without_browser_use(tmp_path: Path) -> None:
+	"""`qa mcp` calls the decision methods directly; the actions above are only wrappers over them."""
+	hitl = HumanInTheLoop(tmp_path / 'perms.json', FakeChannel(['n', 'hunter2']))
+	denied = asyncio.run(hitl.decide_permission('Wipe-DB', 'wipe'))
+	assert denied.ok is False and 'DENIED' in denied.content and 'wipe' in denied.memory
+
+	released = asyncio.run(hitl.release_credential('Password'))
+	assert released.ok is True and '<secret>password</secret>' in released.content
+	assert 'hunter2' not in released.content and 'hunter2' not in released.memory
+	assert asyncio.run(hitl.release_credential('password')).content.startswith('Already available')
+
+
 def test_autonomy_allow_grants_without_asking_and_leaves_no_trace(tmp_path: Path) -> None:
 	perms = tmp_path / 'perms.json'
 	ch = FakeChannel()  # no scripted answers: asking at all would raise

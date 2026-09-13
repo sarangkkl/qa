@@ -314,3 +314,7 @@ crawl as a success: it kept everything it had already mapped, and its exit code 
    still released only under an explicit human grant with its origin binding intact. And
    `approve` stays `human_only` in every mode. Note what it is not: it governs actions the
    agent *declares* risky, so it is not a sandbox.
+7. **The MCP surface (`qa mcp`) obeys 2 and 3 verbatim.** There the "socket" is stdin: EOF
+   abandons every pending dialog with `""`, and no tool result ever carries a credential
+   value. Approval, permission and credential asks go to a native dialog, never to the agent
+   that is calling the tools. See ARCHITECTURE.md §12.

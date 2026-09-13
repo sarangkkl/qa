@@ -119,6 +119,16 @@ def test_a_line_carrying_a_credential_is_withheld() -> None:
 	assert 'this line is fine' in out
 
 
+def test_redact_replaces_every_live_value() -> None:
+	"""Text that leaves the process any other way than the feed: a DOM that echoes a password."""
+	secrets: dict[str, Any] = {'password': 'hunter2', 'per_domain': {'shop.test': 'swordfish'}}
+	assert stream.redact('typed hunter2, then swordfish, then hunter2', secrets) == (
+		'typed [secret], then [secret], then [secret]'
+	)
+	assert stream.redact('nothing here', secrets) == 'nothing here'
+	assert stream.redact('hunter2', None) == 'hunter2'
+
+
 def test_secret_values_flattens_the_per_domain_shape() -> None:
 	assert sorted(stream.secret_values({'a': 'x', 'b': {'shop.test': 'y'}, 'c': ''})) == ['x', 'y']
 	assert stream.secret_values(None) == []

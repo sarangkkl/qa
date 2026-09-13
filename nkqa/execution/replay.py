@@ -11,7 +11,7 @@ from browser_use.browser import BrowserProfile
 from pydantic import BaseModel
 
 from nkqa import config as config_mod
-from nkqa.execution.evidence import list_runs, recorded_runs
+from nkqa.execution.evidence import HISTORY, STEP_LOG, list_runs, recorded_runs
 from nkqa.hitl import HumanInTheLoop
 from nkqa.models import resolve_llm
 from nkqa.ui import Channel
@@ -28,23 +28,32 @@ async def _collect_replay_secrets(hitl: HumanInTheLoop, history_file: Path) -> N
 async def resolve_history_file(ws: Workspace, ch: Channel, name_or_path: str) -> Path | None:
 	"""Accept a run name, a run dir, or a direct path to a history.json."""
 	if not name_or_path:
-		runs = recorded_runs(ws.runs_dir)
+		runs = replayable_runs(ws.runs_dir)
 		if len(runs) == 1:
-			return runs[0] / 'history.json'
+			return runs[0] / HISTORY
 		await list_runs(ch, ws.runs_dir)
 		return None
 	candidates = [
-		ws.runs_dir / name_or_path / 'history.json',  # exact run-dir name (timestamped scenario runs)
-		ws.runs_dir / slugify(name_or_path) / 'history.json',
-		Path(name_or_path) / 'history.json',
+		ws.runs_dir / name_or_path / HISTORY,  # exact run-dir name (timestamped scenario runs)
+		ws.runs_dir / slugify(name_or_path) / HISTORY,
+		Path(name_or_path) / HISTORY,
 		Path(name_or_path),
 	]
 	for c in candidates:
 		if c.is_file():
 			return c
+	# A run the MCP driver recorded has a step log but no agent history - the external agent
+	# made every decision, so there is nothing browser-use could rerun.
+	if any((c.parent / STEP_LOG).is_file() for c in candidates[:3]):
+		await ch.log(f'"{name_or_path}" was recorded by the MCP driver (steps.json) - there is nothing to replay.')
+		return None
 	await ch.log(f'No recording found for "{name_or_path}".')
 	await list_runs(ch, ws.runs_dir)
 	return None
+
+
+def replayable_runs(runs_dir: Path) -> list[Path]:
+	return [d for d in recorded_runs(runs_dir) if (d / HISTORY).is_file()]
 
 
 def parse_vars(var_pairs: list[str]) -> dict[str, str]:
@@ -100,13 +109,13 @@ async def replay(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, history_file:
 
 
 async def replay_all(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, var_pairs: list[str]) -> int:
-	runs = recorded_runs(ws.runs_dir)
+	runs = replayable_runs(ws.runs_dir)
 	if not runs:
-		await ch.log('No recorded tests yet. Record one: qa run <url>')
+		await ch.log('No replayable recordings yet. Record one: qa run <url>')
 		return 2
 	verdicts: dict[str, int] = {}
 	for d in runs:
-		verdicts[d.name] = await replay(ws, hitl, ch, d / 'history.json', var_pairs)
+		verdicts[d.name] = await replay(ws, hitl, ch, d / HISTORY, var_pairs)
 	await ch.log('\n=== SUITE SUMMARY ===')
 	for name, code in verdicts.items():
 		await ch.log(f'  {"✅ PASS" if code == 0 else "❌ FAIL"}  {name}')

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 from nkqa import chats as chats_mod
 from nkqa import config as config_mod
 from nkqa import scenarios as scenarios_mod
-from nkqa.execution.evidence import recorded_runs, step_count
+from nkqa.execution.evidence import recorded_runs, recording_file, step_count
 from nkqa.execution.report import last_verdict, latest_run_dir, read_results
 from nkqa.hitl import HumanInTheLoop
 from nkqa.server import auth
@@ -216,7 +216,7 @@ def create_app(ws: Workspace) -> FastAPI:
 		videos = sorted(p.name for p in (run_dir / 'videos').glob('*.mp4')) if (run_dir / 'videos').is_dir() else []
 		return {
 			'name': name,
-			'steps': step_count(run_dir / 'history.json') if (run_dir / 'history.json').is_file() else 0,
+			'steps': step_count(rec) if (rec := recording_file(run_dir)) is not None else 0,
 			'result': record.model_dump() if record else None,
 			'artifacts': artifacts,
 			'videos': [f'/artifacts/runs/{name}/videos/{v}' for v in videos],

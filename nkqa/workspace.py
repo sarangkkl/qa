@@ -1,14 +1,22 @@
 """Workspace discovery and layout. All filesystem paths come from here."""
 
+import json
+import os
 import re
 import shutil
+import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from nkqa.config import render_template
 
 CONFIG_FILE = 'config.yaml'
 VAULT_FILE = 'vault.yaml'
+# The desktop app's identifier (desktop/src-tauri/tauri.conf.json) and its recents file
+# (desktop/src-tauri/src/lib.rs). Read-only from here: the desktop owns it.
+DESKTOP_ID = 'com.gauravsah.nkqa'
+RECENTS_FILE = 'workspaces.json'
 
 OVERVIEW_STUB = """\
 # App overview
@@ -52,6 +60,10 @@ class Workspace:
 	def run_dir(self, name: str) -> Path:
 		return self.runs_dir / slugify(name)
 
+	def scenario_run_dir(self, scenario_id: str, now: datetime | None = None) -> Path:
+		"""One timestamped dir per scenario run; `report.latest_run_dir` globs this exact shape."""
+		return self.runs_dir / f'{scenario_id.replace("/", "-")}--{now or datetime.now():%Y%m%d-%H%M%S}'
+
 	def identity(self) -> str:
 		"""Stable id for this checkout, so two clones on one machine keep separate secrets.
 
@@ -85,6 +97,32 @@ def find(start: Path | None = None) -> Workspace | None:
 		if found is not None:
 			return found
 	return None
+
+
+def recents_file() -> Path:
+	"""Where the desktop app keeps its recent-workspaces list (Tauri's app_data_dir per OS)."""
+	if sys.platform == 'darwin':
+		base = Path.home() / 'Library' / 'Application Support'
+	elif sys.platform == 'win32':
+		base = Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming')
+	else:
+		base = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share')
+	return base / DESKTOP_ID / RECENTS_FILE
+
+
+def recent_workspaces(recents: Path | None = None) -> list[Workspace]:
+	"""Workspaces the desktop app opened recently, most recent first. Only ones that still exist."""
+	try:
+		raw: object = json.loads((recents or recents_file()).read_text(encoding='utf-8'))
+	except (OSError, json.JSONDecodeError):
+		return []
+	if not isinstance(raw, list):
+		return []
+	found: list[Workspace] = []
+	for entry in raw:  # pyright: ignore[reportUnknownVariableType]
+		if isinstance(entry, str) and (ws := at(Path(entry))) is not None:
+			found.append(ws)
+	return found
 
 
 def create(root: Path, app_name: str = '', base_url: str = '') -> Workspace:

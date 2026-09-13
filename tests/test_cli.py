@@ -34,6 +34,15 @@ def test_init_then_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 	assert run_cli(monkeypatch, ['list']) == 0  # empty workspace lists fine
 
 
+def test_mcp_is_a_workspace_free_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+	"""`qa mcp` must start outside a workspace (the agent picks one later), but a --workspace
+	that is not one is a usage error, like every other bad argument."""
+	args = cli.build_parser().parse_args(['mcp', '--workspace', 'x'])
+	assert args.command == 'mcp' and args.workspace == 'x'
+	monkeypatch.chdir(tmp_path)
+	assert run_cli(monkeypatch, ['mcp', '--workspace', str(tmp_path / 'nope')]) == 2
+
+
 def test_replay_unknown_name_exits_two(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 	monkeypatch.chdir(tmp_path)
 	workspace.create(tmp_path)

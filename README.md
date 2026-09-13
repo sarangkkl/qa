@@ -129,6 +129,25 @@ Atlassian's remote MCP; first use opens an OAuth login in your browser).
 The gate: `qa run` refuses drafts, deprecated scenarios, and scenarios edited after
 approval (stale hash). A human approval is always in the loop before a browser moves.
 
+### Drive it from your coding agent (MCP)
+
+If you already pay for Claude Code, Codex or Cursor, that agent can be the QA engineer and
+nkqa the hands. `qa mcp` serves the workspace over MCP; **nkqa makes zero model calls on this
+path** - the agent reads the appmap, writes the scenarios, drives the browser one action at a
+time and reports the verdicts. Register it once:
+
+    claude mcp add nkqa -- /path/to/venv/bin/qa mcp        # Claude Code
+    codex mcp add nkqa -- /path/to/venv/bin/qa mcp         # Codex
+    # Cursor: .cursor/mcp.json -> {"mcpServers": {"nkqa": {"command": "/path/to/venv/bin/qa", "args": ["mcp"]}}}
+
+Then, inside a project that has a workspace (or after `use_workspace`), `/nkqa:plan the checkout
+flow` drafts scenarios and `/nkqa:run checkout/coupon` executes one. The gates stay yours:
+**approvals, permission requests and credentials open as native dialogs on your screen**, never
+in the agent's chat, so the agent cannot approve its own scenario, grant itself a risky action,
+or ever see a password (it types the `<secret>name</secret>` placeholder; the value is filled in
+inside the browser). Evidence lands under `runs/<name>/` as `steps.json`, `steps/*.png` and the
+video, and the desktop app shows it like any other run.
+
 ## Workspace
 
 ```
@@ -137,7 +156,7 @@ vault.yaml      # credential names, descriptions, origins - never values
 appmap/         # what the agent knows about your app (grows over time)
 scenarios/      # one markdown file per scenario; approval bound to a content hash
 chats/          # conversations, committed: the reasoning behind a scenario is reviewable
-runs/<name>/    # evidence per run: results.md, history.json, videos/, gif, conversation/
+runs/<name>/    # evidence per run: results.md, history.json (or steps.json + steps/ from `qa mcp`), videos/, gif
 runs/suite--*/  # suite.md + suite.json: one report per suite run, for CI to read
 .nkqa/          # gitignored, machine-local
 ```

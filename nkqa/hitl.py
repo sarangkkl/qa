@@ -9,6 +9,7 @@ Credentials the vault knows about follow the release chain in `ask_credential`. 
 else still works exactly as before: ask the human, hold it for the session, forget it.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -17,9 +18,23 @@ from browser_use import ActionResult, Tools
 from nkqa.ui import Channel, Event, is_hidden
 from nkqa.vault import Vault, load_grants, normalize, origin_allows, save_grants
 
-__all__ = ['HumanInTheLoop', 'is_hidden']
+__all__ = ['Decision', 'HumanInTheLoop', 'is_hidden']
 
 PERMISSION_CHOICES = ['y', 's', 'a', 'n']
+
+
+@dataclass
+class Decision:
+	"""What a gate decided, in words the agent acts on. `memory` is the one-line audit trail
+	that outlives the channel (it lands in history.json when browser-use is the driver)."""
+
+	ok: bool
+	content: str
+	memory: str = ''
+
+	def action_result(self) -> ActionResult:
+		return ActionResult(extracted_content=self.content, long_term_memory=self.memory or None)
+
 
 # How the session answers `request_permission` when it would otherwise stop and ask.
 # Session-scoped and never persisted: there is no config.yaml key for this, so a workspace
@@ -56,16 +71,17 @@ class HumanInTheLoop:
 		grants.permissions.add(key)
 		save_grants(self.permissions_file, grants)
 
-	def _denied(self, key: str, description: str, why: str = '') -> ActionResult:
+	def _denied(self, key: str, description: str, why: str = '') -> Decision:
 		"""A refusal is not an error: the agent notes it and keeps testing everything else.
 
 		Auto-refuse returns the same thing a human 'n' does, so the agent's behaviour after
 		a denial is identical however the denial was reached.
 		"""
-		return ActionResult(
-			extracted_content=f'Permission "{key}" DENIED. Do not perform this action.{why} '
+		return Decision(
+			False,
+			f'Permission "{key}" DENIED. Do not perform this action.{why} '
 			'Record it in your report as "not tested - permission denied" and continue with other tests.',
-			long_term_memory=f'Permission denied for: {description}',
+			f'Permission denied for: {description}',
 		)
 
 	# --- secret storage ------------------------------------------------------
@@ -100,7 +116,7 @@ class HumanInTheLoop:
 
 	# --- the vault release chain --------------------------------------------
 
-	async def _from_vault(self, key: str, page_url: str | None) -> tuple[str, ActionResult | None]:
+	async def _from_vault(self, key: str, page_url: str | None) -> tuple[str, Decision | None]:
 		"""('' , refusal) when denied · (value, None) when released · ('', None) to fall through."""
 		if self.vault is None:
 			return '', None
@@ -110,13 +126,12 @@ class HumanInTheLoop:
 
 		if not origin_allows(spec.origin, page_url):
 			await self.channel.log(f'🚫 credential "{key}" is bound to {spec.origin}; refusing to release it here')
-			return '', ActionResult(
-				extracted_content=(
-					f'Credential "{key}" is bound to {spec.origin} and the browser is on {page_url}. '
-					'It was NOT released. Do not try again from this page; report the step as '
-					'"not tested - credential is bound to another origin".'
-				),
-				long_term_memory=f'Credential "{key}" refused: origin {page_url} does not match {spec.origin}.',
+			return '', Decision(
+				False,
+				f'Credential "{key}" is bound to {spec.origin} and the browser is on {page_url}. '
+				'It was NOT released. Do not try again from this page; report the step as '
+				'"not tested - credential is bound to another origin".',
+				f'Credential "{key}" refused: origin {page_url} does not match {spec.origin}.',
 			)
 
 		stored, source = self.vault.get(key)
@@ -139,10 +154,11 @@ class HumanInTheLoop:
 		)
 		choice = choice[:1]
 		if choice == 'n' or not choice:
-			return '', ActionResult(
-				extracted_content=f'The human denied the stored credential "{key}". '
+			return '', Decision(
+				False,
+				f'The human denied the stored credential "{key}". '
 				'Skip this flow and note it as "not tested - credential denied".',
-				long_term_memory=f'Credential "{key}" denied by the human.',
+				f'Credential "{key}" denied by the human.',
 			)
 		if choice == 's':
 			self.session_credentials.add(key)
@@ -150,6 +166,91 @@ class HumanInTheLoop:
 			self.vault.grant(key, self.scenario_id)
 		self.store_secret(key, stored, spec.origin)
 		return stored, None
+
+	# --- the two gates ---------------------------------------------------------
+	# Plain methods, so any driver can call them: browser-use's Agent through the actions in
+	# build_tools(), an external agent through `qa mcp`. The words are the contract either way.
+
+	async def release_credential(self, name: str, page_url: str = '') -> Decision:
+		"""Make a credential available under its placeholder. The value never leaves this object."""
+		key = normalize(name)
+		if self.has_secret(key):
+			return Decision(True, f'Already available. Type <secret>{key}</secret> into the field.')
+
+		released, refusal = await self._from_vault(key, page_url)
+		if refusal is not None:
+			return refusal
+		if released:
+			return Decision(
+				True,
+				f'Ready. Type the literal text <secret>{key}</secret> into the field.',
+				f'Credential "{key}" released from the vault; use <secret>{key}</secret>.',
+			)
+
+		spec = self.vault.specs.get(key) if self.vault else None
+		value = await self.collect_secret(
+			key, f'🔑 QA agent needs "{key}" to continue: ', origin=spec.origin if spec else ''
+		)
+		if not value:
+			return Decision(False, f'Human provided no value for {key}. Skip this flow and note it as untestable.')
+		offer_save = spec is not None and self.vault is not None and self.vault.writable
+		if offer_save and await self.channel.confirm(f'💾 Save "{key}" to the vault for next time? [y/N]: '):
+			assert self.vault is not None
+			self.vault.set(key, value)
+			await self.channel.log(f'🔐 stored "{key}" in the {self.vault.service} keychain entry')
+		return Decision(
+			True,
+			f'Stored. To use it, type the literal text <secret>{key}</secret> into the field.',
+			f'Credential "{key}" collected from human; usable as <secret>{key}</secret>.',
+		)
+
+	async def decide_permission(self, permission_key: str, description: str) -> Decision:
+		key = permission_key.strip().lower()
+
+		# Above the stored grants on purpose: "refuse everything right now" has to beat a
+		# grant someone allowed-always weeks ago. The conservative answer wins.
+		if self.autonomy == 'refuse':
+			await self.channel.log(f'⛔ auto-refused permission "{key}" (autonomy: refuse)')
+			return self._denied(key, description, ' Autonomy is set to refuse for this session.')
+
+		if key in self._load_always_grants():
+			return Decision(True, f'Permission "{key}" granted (previously allowed always).')
+		if key in self.session_grants:
+			return Decision(True, f'Permission "{key}" granted (allowed for this session).')
+
+		# Below the two lookups, so an existing grant keeps its own more specific message
+		# and this adds no behaviour delta for already-granted keys. Leaves no residue:
+		# nothing is stored, so switching back to 'ask' resumes prompting immediately.
+		if self.autonomy == 'allow':
+			await self.channel.emit(
+				Event('log', f'⚠️  auto-granted permission "{key}": {description}', {'permission': key, 'auto': 'allow'})
+			)
+			return Decision(
+				True,
+				f'Permission "{key}" granted automatically (session autonomy: allow).',
+				# The channel log dies with the window; this is what reaches history.json,
+				# so an unattended run can still be audited afterwards.
+				f'Permission "{key}" auto-granted by session autonomy: {description}',
+			)
+
+		choice = await self.channel.choose(
+			f'⚠️  QA agent requests permission: {description}\n'
+			f'    key: {key}\n'
+			f'[y] allow once  [s] allow this session  [a] allow always  [n] deny: ',
+			PERMISSION_CHOICES,
+			key=key,
+			interrupt=True,
+		)
+		choice = choice[:1]
+		if choice == 'a':
+			self._save_always_grant(key)
+			return Decision(True, f'Permission "{key}" granted permanently.')
+		if choice == 's':
+			self.session_grants.add(key)
+			return Decision(True, f'Permission "{key}" granted for this session.')
+		if choice == 'y':
+			return Decision(True, f'Permission "{key}" granted once. Ask again next time.')
+		return self._denied(key, description)
 
 	def build_tools(self) -> Tools[None]:
 		tools: Tools[None] = Tools()
@@ -173,36 +274,7 @@ class HumanInTheLoop:
 			'from the scenario or the app map.'
 		)
 		async def ask_credential(name: str, page_url: str = '') -> ActionResult:  # pyright: ignore[reportUnusedFunction]
-			key = normalize(name)
-			if self.has_secret(key):
-				return ActionResult(extracted_content=f'Already available. Type <secret>{key}</secret> into the field.')
-
-			released, refusal = await self._from_vault(key, page_url)
-			if refusal is not None:
-				return refusal
-			if released:
-				return ActionResult(
-					extracted_content=f'Ready. Type the literal text <secret>{key}</secret> into the field.',
-					long_term_memory=f'Credential "{key}" released from the vault; use <secret>{key}</secret>.',
-				)
-
-			spec = self.vault.specs.get(key) if self.vault else None
-			value = await self.collect_secret(
-				key, f'🔑 QA agent needs "{key}" to continue: ', origin=spec.origin if spec else ''
-			)
-			if not value:
-				return ActionResult(
-					extracted_content=f'Human provided no value for {key}. Skip this flow and note it as untestable.'
-				)
-			offer_save = spec is not None and self.vault is not None and self.vault.writable
-			if offer_save and await self.channel.confirm(f'💾 Save "{key}" to the vault for next time? [y/N]: '):
-				assert self.vault is not None
-				self.vault.set(key, value)
-				await self.channel.log(f'🔐 stored "{key}" in the {self.vault.service} keychain entry')
-			return ActionResult(
-				extracted_content=f'Stored. To use it, type the literal text <secret>{key}</secret> into the field.',
-				long_term_memory=f'Credential "{key}" collected from human; usable as <secret>{key}</secret>.',
-			)
+			return (await self.release_credential(name, page_url)).action_result()
 
 		@tools.registry.action(
 			'MUST be called before any dangerous or irreversible action: deleting data, submitting real '
@@ -211,54 +283,6 @@ class HumanInTheLoop:
 			'description of what you want to do and why. Only proceed if permission is granted.'
 		)
 		async def request_permission(permission_key: str, description: str) -> ActionResult:  # pyright: ignore[reportUnusedFunction]
-			key = permission_key.strip().lower()
-
-			# Above the stored grants on purpose: "refuse everything right now" has to beat a
-			# grant someone allowed-always weeks ago. The conservative answer wins.
-			if self.autonomy == 'refuse':
-				await self.channel.log(f'⛔ auto-refused permission "{key}" (autonomy: refuse)')
-				return self._denied(key, description, ' Autonomy is set to refuse for this session.')
-
-			if key in self._load_always_grants():
-				return ActionResult(extracted_content=f'Permission "{key}" granted (previously allowed always).')
-			if key in self.session_grants:
-				return ActionResult(extracted_content=f'Permission "{key}" granted (allowed for this session).')
-
-			# Below the two lookups, so an existing grant keeps its own more specific message
-			# and this adds no behaviour delta for already-granted keys. Leaves no residue:
-			# nothing is stored, so switching back to 'ask' resumes prompting immediately.
-			if self.autonomy == 'allow':
-				await self.channel.emit(
-					Event(
-						'log',
-						f'⚠️  auto-granted permission "{key}": {description}',
-						{'permission': key, 'auto': 'allow'},
-					)
-				)
-				return ActionResult(
-					extracted_content=f'Permission "{key}" granted automatically (session autonomy: allow).',
-					# The channel log dies with the window; this is what reaches history.json,
-					# so an unattended run can still be audited afterwards.
-					long_term_memory=f'Permission "{key}" auto-granted by session autonomy: {description}',
-				)
-
-			choice = await self.channel.choose(
-				f'⚠️  QA agent requests permission: {description}\n'
-				f'    key: {key}\n'
-				f'[y] allow once  [s] allow this session  [a] allow always  [n] deny: ',
-				PERMISSION_CHOICES,
-				key=key,
-				interrupt=True,
-			)
-			choice = choice[:1]
-			if choice == 'a':
-				self._save_always_grant(key)
-				return ActionResult(extracted_content=f'Permission "{key}" granted permanently.')
-			if choice == 's':
-				self.session_grants.add(key)
-				return ActionResult(extracted_content=f'Permission "{key}" granted for this session.')
-			if choice == 'y':
-				return ActionResult(extracted_content=f'Permission "{key}" granted once. Ask again next time.')
-			return self._denied(key, description)
+			return (await self.decide_permission(permission_key, description)).action_result()
 
 		return tools

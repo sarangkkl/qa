@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nkqa": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/sarangkkl/nkqa", "qa", "mcp"]
+    }
+  }
+}

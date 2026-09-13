@@ -293,6 +293,7 @@ qa auth [server] [--reset]              # OAuth sign-in for a configured connect
 qa list / qa models        # recorded runs · model roles, providers, key presence
 qa set-model --provider anthropic|openai [--smart ID] [--fast ID]   # point the tiers at a provider
 qa file-bug <run> [--step N]            # push a finding to Jira with repro + evidence
+qa mcp [--workspace DIR]                # serve all of the above to Claude Code / Codex / Cursor (§12)
 ```
 
 ## 9. Build phases
@@ -350,3 +351,58 @@ writing to the same terminal.
 - Xray/Zephyr-style test-cycle management in Jira
 - Vector database as system of record
 - Autonomous bug filing without human instruction
+
+## 12. nkqa as an MCP server (LLM-free)
+
+§7 makes the testing agent an MCP *client*. `qa mcp` is the other direction: nkqa is the
+server, and the user's own coding agent - Claude Code, Codex, Cursor, anything that speaks
+MCP over stdio - is both the brain and the hands. **Nothing on this path calls a model.**
+The planner, executor, reflector and chat roles are simply not used; the agent reads the
+appmap, writes scenarios, drives the browser one action at a time and reports verdicts.
+
+```
+nkqa/mcp_server.py        FastMCP server: tools, prompts, the stdio transport, one Session
+nkqa/dialogs.py           DialogChannel - asks become native OS dialogs (osascript on macOS)
+nkqa/execution/driver.py  Driver - BrowserSession + the action registry, no Agent loop; steps.json
+```
+
+**Tools** (docstrings are the agent's documentation - they say when to call and what next):
+
+| group | tools |
+|---|---|
+| workspace | `workspace_status` · `list_workspaces` (cwd + the desktop app's recents) · `use_workspace` · `init_workspace` |
+| knowledge | `read_appmap` · `update_appmap` → `appmap.apply` (sandboxed, git-committed) |
+| scenarios | `list_scenarios` · `read_scenario` · `write_scenario` → `planner.write_drafts` · `approve_scenario` |
+| runs | `start_run` (gate: `runnable() == 'ok'`) · `start_explore` · `browser_state` · `navigate` · `click` · `type_text` · `scroll` · `send_keys` · `go_back` · `list_tabs` · `switch_tab` · `close_tab` · `wait` · `request_permission` · `ask_credential` · `finish_run` · `finish_explore` · `abort_run` · `list_runs` · `read_run` |
+| jira | `read_ticket` · `file_bug` (confirmed in a dialog) |
+
+Prompts `plan`, `run`, `explore` package `PLANNER_SYSTEM` / `QA_RULES_MCP` with the tool
+workflow; Claude Code shows them as `/nkqa:plan …`. The server's `instructions` carry the
+workflow and the three hard rules (ask before anything irreversible; never invent credentials;
+a broken feature is a finding).
+
+What does not change:
+- **The gates are the human's keystrokes.** `approve_scenario`, `request_permission` and
+  `ask_credential` reach the human through `DialogChannel` - a native dialog the agent cannot
+  answer. The agent sees approved/denied, or "type `<secret>name</secret>`". Every failure of
+  a dialog (Cancel, timeout, no dialog available, client gone) answers `''`, which is deny.
+- **The permission gate is enforced by convention, not a sandbox** - exactly as in §4. Tool
+  descriptions, `instructions` and the prompts tell the agent to call `request_permission`
+  first; nothing stops `click` from clicking Delete. `hitl.autonomy` is fixed at `ask` here.
+- **The secret contract is intact.** `type_text` passes `hitl.secrets` as browser-use's
+  `sensitive_data`, so the DOM-level substitution and origin scoping are the Agent's own.
+  Everything returned to the agent - state text, URLs, results, the step log - passes through
+  `stream.redact`.
+- **A dead client denies and closes the browser.** stdin EOF (or SIGTERM) abandons every open
+  dialog, the in-flight tool returns, the driver finalises `steps.json` and kills the browser
+  (which is what writes the video); a tool stuck in the browser gets 60 s, then the process
+  exits regardless.
+- **stdout is the protocol.** `sys.stdout` is pointed at stderr before anything else runs and
+  the transport is handed the real stream explicitly, so a stray print can never corrupt a frame.
+
+Evidence: a driven run writes `steps.json` (every action with params - placeholders unresolved -
+URL before/after, result, error, `steps/step-NNN.png`) instead of `history.json`. `qa list`,
+`/runs/{name}` and `reflector.run_facts` read either; `qa replay` refuses a steps-only run,
+because the external agent made every decision and there is nothing browser-use could rerun.
+`Vault(ws)` is mandatory in the session for the same reason as in the sidecar: without it the
+release chain short-circuits.

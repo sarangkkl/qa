@@ -19,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
 	init.add_argument('--app-name', default='', help='app name to write into config.yaml')
 	init.add_argument('--base-url', default='', help='base URL to write into config.yaml')
 	sub.add_parser('chat', help='interactive session (same as running `qa` with no arguments)')
+	mcp = sub.add_parser('mcp', help='serve nkqa to Claude Code / Codex / Cursor over MCP stdio (no nkqa model calls)')
+	mcp.add_argument('--workspace', default='', help='workspace dir (default: found from cwd, else use_workspace)')
 
 	plan = sub.add_parser('plan', help='draft test scenarios from app knowledge (no browser)')
 	plan.add_argument('ask', nargs='?', default='', help='what to test, e.g. "the checkout flow"')
@@ -139,6 +141,10 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.init(ch, None, args.app_name, args.base_url)))
 	if command == 'models':
 		sys.exit(actions.run_sync(actions.models(ch)))
+	if command == 'mcp':
+		from nkqa.mcp_server import main as serve_mcp
+
+		sys.exit(serve_mcp(args.workspace))  # not run_sync: its SIGINT handler would fight the transport
 
 	ws = require_workspace()
 	if command == 'scenarios':

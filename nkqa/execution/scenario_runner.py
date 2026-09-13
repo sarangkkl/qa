@@ -9,7 +9,6 @@ refused here, no matter how they were invoked.
 
 import asyncio
 import contextlib
-from datetime import datetime
 from pathlib import Path
 
 from browser_use import Agent, Tools
@@ -81,7 +80,7 @@ async def run_scenario(
 		return 2
 
 	hitl.scenario_id = scenario.id  # vault grants can be scoped to one scenario
-	run_dir = ws.runs_dir / f'{scenario.id.replace("/", "-")}--{datetime.now():%Y%m%d-%H%M%S}'
+	run_dir = ws.scenario_run_dir(scenario.id)
 	run_dir.mkdir(parents=True, exist_ok=True)
 	await ch.log(f'▶️  Running scenario "{scenario.title}" ({len(scenario.steps)} steps). 🎬 Recording video.\n')
 
