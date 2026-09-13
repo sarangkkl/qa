@@ -1,0 +1,12 @@
+{
+  "name": "nkqa",
+  "version": "0.1.0",
+  "description": "AI QA teammate: plan test scenarios, run them in a real recorded browser, keep the evidence. Approvals, permissions and credentials stay with you, in native dialogs.",
+  "author": {
+    "name": "Gaurav Sah",
+    "url": "https://github.com/sarangkkl"
+  },
+  "repository": "https://github.com/sarangkkl/nkqa",
+  "homepage": "https://github.com/sarangkkl/nkqa#readme",
+  "keywords": ["qa", "testing", "browser", "e2e", "mcp", "claude-code"]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "nkqa",
+  "description": "nkqa - an AI QA teammate. Your coding agent plans scenarios, drives a real recorded browser and reports verdicts; you approve every scenario and every risky action.",
+  "owner": {
+    "name": "Gaurav Sah",
+    "url": "https://github.com/sarangkkl"
+  },
+  "plugins": [
+    {
+      "name": "nkqa",
+      "source": "./",
+      "description": "QA workspace + recorded browser for Claude Code. Plan scenarios, run them in a real browser, keep the evidence. Zero extra model cost: your Claude Code does the thinking."
+    }
+  ]
+}

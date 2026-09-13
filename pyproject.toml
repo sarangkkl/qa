@@ -17,7 +17,7 @@ requires = ['setuptools>=77']
 build-backend = 'setuptools.build_meta'
 
 [tool.setuptools]
-packages = ['nkqa', 'nkqa.execution', 'nkqa.server']
+packages = ['nkqa', 'nkqa.execution', 'nkqa.server', 'nkqa.shell']
 
 [dependency-groups]
 dev = ['ruff', 'pyright', 'pytest', 'httpx', 'pyinstaller']
