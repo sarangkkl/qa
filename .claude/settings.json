@@ -72,11 +72,20 @@
       "Bash(venv/bin/pytest tests/test_model_settings.py -q)",
       "Bash(grep -vE \"^\\\\s*#|^\\\\s*$\" /Users/gaurav/Documents/slrtesting/config.yaml)",
       "Bash(xargs kill)",
-      "Bash(venv/bin/pytest tests/test_mcp_server.py::test_every_tool_documents_itself -q -vv)"
+      "Bash(venv/bin/pytest tests/test_mcp_server.py::test_every_tool_documents_itself -q -vv)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "Bash(gh pr *)",
+      "Bash(git pull *)",
+      "Bash(sed -n '/add_parser\\(.connect/,/^$/p;/add_parser\\(.auth/,/^$/p' nkqa/cli.py)",
+      "Bash(sed -n '/^async def connect/,/^async def _sign_in/p' nkqa/actions.py)",
+      "Bash(claude mcp *)",
+      "Bash(python3 -c ' *)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",
-      "/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/lib/python*/site-packages/browser_use/llm"
+      "/Users/gaurav/Documents/dreams/nkqa/browser-use/venv/lib/python*/site-packages/browser_use/llm",
+      "/Users/gaurav/Documents/dreams/nkqa/nkqa-public"
     ]
   }
 }

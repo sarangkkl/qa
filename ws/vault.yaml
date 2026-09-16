@@ -1,0 +1,14 @@
+# What credentials this project needs. Names and origins only - never values.
+# Values live in your OS keychain (`qa vault set <name>`) or, for CI, in
+# NKQA_SECRET_<NAME> environment variables.
+#
+# `origin` binds a credential to one site: the agent cannot pull it out of the keychain
+# while the browser is anywhere else, and browser-use will not type it on another page.
+# Subdomain globs are fine; a bare '*' is refused.
+credentials: {}
+#   qa_user:
+#     description: QA account email
+#     origin: https://dev.example.com
+#   qa_password:
+#     description: password for qa_user
+#     origin: https://*.example.com
