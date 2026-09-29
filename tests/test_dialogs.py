@@ -1,4 +1,8 @@
-"""The native-dialog channel: every way a dialog can fail answers '', which is deny."""
+"""The native-dialog channel: every way a dialog can fail answers '', which is deny.
+
+Three backends print the same three shapes, so the parser is shared - and so are these tests:
+every platform case runs the same assertions against its own argv.
+"""
 
 import asyncio
 from typing import Any
@@ -7,6 +11,8 @@ import pytest
 
 from nkqa import dialogs
 from nkqa.ui import Ask, Event
+
+PLATFORMS = ['macos', 'windows', 'linux']
 
 
 class FakeProcess:
@@ -28,16 +34,19 @@ class FakeProcess:
 			self.hold.set()
 
 
-def scripted(monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str) -> list[tuple[str, list[str]]]:
-	"""Replace osascript with a canned answer; return the calls it received."""
-	calls: list[tuple[str, list[str]]] = []
+def scripted(
+	monkeypatch: pytest.MonkeyPatch, which: str, returncode: int, stdout: str
+) -> list[tuple[list[str], dict[str, str]]]:
+	"""Pretend to be `which` and answer every dialog with a canned result."""
+	calls: list[tuple[list[str], dict[str, str]]] = []
 
-	async def fake_spawn(script: str, args: list[str]) -> Any:
-		calls.append((script, args))
+	async def fake_spawn(argv: list[str], env: dict[str, str]) -> Any:
+		calls.append((argv, env))
 		return FakeProcess(returncode, stdout)
 
-	monkeypatch.setattr(dialogs, 'spawn_osascript', fake_spawn)
-	monkeypatch.setattr(dialogs, 'has_osascript', lambda: True)
+	monkeypatch.setattr(dialogs, 'spawn', fake_spawn)
+	monkeypatch.setattr(dialogs, 'backend', lambda: which)
+	monkeypatch.setattr(dialogs, 'powershell', lambda: 'powershell')
 	return calls
 
 
@@ -45,46 +54,92 @@ def ask(request: Ask) -> str:
 	return asyncio.run(dialogs.DialogChannel().ask(request))
 
 
-def test_choice_returns_the_letter_and_passes_text_as_argv(monkeypatch: pytest.MonkeyPatch) -> None:
-	calls = scripted(monkeypatch, 0, 'a  allow always\n')
+def everything(argv: list[str], env: dict[str, str]) -> str:
+	"""All the text a backend was handed, wherever it put it."""
+	return '\n'.join([*argv, *env.values()])
+
+
+@pytest.mark.parametrize('which', PLATFORMS)
+def test_choice_returns_the_letter(monkeypatch: pytest.MonkeyPatch, which: str) -> None:
+	calls = scripted(monkeypatch, which, 0, 'a  allow always\n')
 	prompt = 'QA agent requests permission: delete "the" user\nkey: del-user'
 	assert ask(Ask('choice', prompt, options=['y', 's', 'a', 'n'])) == 'a'
-	script, args = calls[0]
-	assert script == dialogs.CHOOSE
-	assert args[0] == prompt  # verbatim: quotes and newlines are never spliced into the script
-	assert args[1:] == ['y  allow once', 's  allow this session', 'a  allow always', 'n  deny']
+	text = everything(*calls[0])
+	assert prompt in text  # verbatim: quotes and newlines are never spliced into a script
+	for option in ('y  allow once', 's  allow this session', 'a  allow always', 'n  deny'):
+		assert option in text
 
 
-def test_cancel_and_failure_both_deny(monkeypatch: pytest.MonkeyPatch) -> None:
-	scripted(monkeypatch, 1, 'User canceled.')
+@pytest.mark.parametrize('which', PLATFORMS)
+def test_cancel_and_timeout_deny(monkeypatch: pytest.MonkeyPatch, which: str) -> None:
+	scripted(monkeypatch, which, 1, 'cancelled')
 	assert ask(Ask('choice', 'p', options=['y', 'n'])) == ''
 	assert ask(Ask('secret', 'p', key='password')) == ''
 	assert ask(Ask('confirm', 'Approve?', body='...')) == ''
-	scripted(monkeypatch, 0, '')  # gave up after the timeout
+	scripted(monkeypatch, which, 0, '')  # closed, or gave up waiting
 	assert ask(Ask('text', 'p')) == ''
+	assert ask(Ask('confirm', 'Approve?', body='...')) == ''
 
 
-def test_confirm_maps_the_button_and_shows_the_body(monkeypatch: pytest.MonkeyPatch) -> None:
-	calls = scripted(monkeypatch, 0, 'Confirm')
-	assert ask(Ask('confirm', 'Approve this scenario? [y/N]: ', body='# Login works\n1. Open the page')) == 'y'
-	script, args = calls[0]
-	assert script == dialogs.CONFIRM
-	assert args == ['Approve this scenario? [y/N]: ', '# Login works\n1. Open the page']
-	scripted(monkeypatch, 0, 'Cancel')
-	assert ask(Ask('confirm', 'Approve?', body='x')) == ''
+@pytest.mark.parametrize('which', PLATFORMS)
+def test_confirm_shows_the_body_and_maps_the_button(monkeypatch: pytest.MonkeyPatch, which: str) -> None:
+	body = '# Login works\n1. Open the page'
+	calls = scripted(monkeypatch, which, 0, 'Confirm')
+	assert ask(Ask('confirm', 'Approve this scenario? [y/N]: ', body=body)) == 'y'
+	assert body in everything(*calls[0])
+	scripted(monkeypatch, which, 0, 'Cancel')
+	assert ask(Ask('confirm', 'Approve?', body=body)) == ''
 
 
-def test_secret_comes_back_hidden_and_is_never_emitted(
-	monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize('which', PLATFORMS)
+def test_secret_is_hidden_and_never_emitted(
+	monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], which: str
 ) -> None:
-	calls = scripted(monkeypatch, 0, 'hunter2\n')
+	calls = scripted(monkeypatch, which, 0, 'hunter2\n')
 	ch = dialogs.DialogChannel()
 	assert asyncio.run(ch.ask(Ask('secret', 'password for qa: ', key='password'))) == 'hunter2'
-	assert calls[0][0] == dialogs.SECRET and 'with hidden answer' in dialogs.SECRET
+	argv, env = calls[0]
+	masked = {'macos': 'with hidden answer', 'windows': 'UseSystemPasswordChar', 'linux': '--hide-text'}[which]
+	assert masked in '\n'.join(argv)
+	assert env.get('NKQA_KIND', 'secret') == 'secret'
 	asyncio.run(ch.emit(Event('log', 'typed the credential')))
 	asyncio.run(ch.emit(Event('frame', 'base64...')))
 	err = capsys.readouterr().err
 	assert 'hunter2' not in err and '[log] typed the credential' in err and 'base64' not in err
+
+
+def test_windows_sends_text_through_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""PowerShell quoting is where a scenario body would otherwise become executable script."""
+	calls = scripted(monkeypatch, 'windows', 0, 'Confirm')
+	ask(Ask('confirm', 'Approve?', body='"; Remove-Item -Recurse C:\\ #'))
+	argv, env = calls[0]
+	assert argv[0] == 'powershell' and argv[-1] == dialogs.WINDOWS
+	assert env['NKQA_BODY'] == '"; Remove-Item -Recurse C:\\ #'
+	assert 'Remove-Item' not in '\n'.join(argv)
+
+
+def test_linux_confirm_prints_the_token_the_parser_expects(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""zenity --question answers with an exit code and no output, so the shell echoes it."""
+	calls = scripted(monkeypatch, 'linux', 0, 'Confirm')
+	ask(Ask('confirm', 'Approve?', body='the scenario'))
+	argv, _ = calls[0]
+	assert argv[0] == 'sh' and 'echo Confirm' in argv[2]
+	assert argv[-1] == 'the scenario'  # argv, not interpolated into the script
+
+
+def test_backend_picks_by_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+	def installed(name: str) -> str:
+		return f'/usr/bin/{name}'
+
+	def missing(name: str) -> str | None:
+		return None
+
+	monkeypatch.setattr(dialogs.shutil, 'which', installed)
+	for platform, expected in (('darwin', 'macos'), ('win32', 'windows'), ('linux', 'linux')):
+		monkeypatch.setattr(dialogs.sys, 'platform', platform)
+		assert dialogs.backend() == expected
+	monkeypatch.setattr(dialogs.shutil, 'which', missing)
+	assert dialogs.backend() == ''
 
 
 def test_abandon_closes_the_dialog_and_denies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,11 +147,11 @@ def test_abandon_closes_the_dialog_and_denies(monkeypatch: pytest.MonkeyPatch) -
 	hold = asyncio.Event()
 	proc = FakeProcess(0, 'Confirm', hold)
 
-	async def fake_spawn(script: str, args: list[str]) -> Any:
+	async def fake_spawn(argv: list[str], env: dict[str, str]) -> Any:
 		return proc
 
-	monkeypatch.setattr(dialogs, 'spawn_osascript', fake_spawn)
-	monkeypatch.setattr(dialogs, 'has_osascript', lambda: True)
+	monkeypatch.setattr(dialogs, 'spawn', fake_spawn)
+	monkeypatch.setattr(dialogs, 'backend', lambda: 'macos')
 
 	async def go() -> str:
 		ch = dialogs.DialogChannel()
@@ -115,7 +170,7 @@ def test_abandon_closes_the_dialog_and_denies(monkeypatch: pytest.MonkeyPatch) -
 def test_no_native_dialog_means_deny_out_loud(
 	monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-	monkeypatch.setattr(dialogs, 'has_osascript', lambda: False)
+	monkeypatch.setattr(dialogs, 'backend', lambda: '')
 	monkeypatch.setattr(dialogs, 'tk_ask', lambda request: '')  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
 	assert ask(Ask('choice', 'p', options=['y', 'n'])) == ''
 	assert 'no native dialog' in capsys.readouterr().err

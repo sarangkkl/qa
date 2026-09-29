@@ -15,22 +15,31 @@ slash parser and the chat agent's tool list, so a new command appears in all thr
 import asyncio
 import json
 import re
-from dataclasses import asdict, replace
+import uuid
+import webbrowser
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from mcp.server.fastmcp.server import StreamableHTTPASGIApp
+from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope
+from starlette.types import Send as AsgiSend
 
 from nkqa import chats as chats_mod
 from nkqa import config as config_mod
+from nkqa import mcp_server
 from nkqa import scenarios as scenarios_mod
 from nkqa.execution.evidence import recorded_runs, recording_file, step_count
 from nkqa.execution.report import last_verdict, latest_run_dir, read_results
 from nkqa.hitl import HumanInTheLoop
-from nkqa.server import auth
-from nkqa.server.channel import SocketChannel
+from nkqa.server import auth, claude
+from nkqa.server.channel import Relay, SocketChannel
 from nkqa.server.jobs import JobRunner
 from nkqa.shell.commands import REGISTRY, ShellContext, parse_slash
 from nkqa.vault import Vault
@@ -125,8 +134,40 @@ def safe_artifact(ws: Workspace, relative: str) -> Path:
 	return target
 
 
-def create_app(ws: Workspace) -> FastAPI:
-	app = FastAPI(title='nkqa sidecar', docs_url=None, redoc_url=None)
+class Guarded:
+	"""/mcp is a raw ASGI app, so it gets the token and origin checks by hand. A class, not a
+	closure: Starlette treats a plain function endpoint as a GET-only request handler."""
+
+	def __init__(self, inner: ASGIApp):
+		self.inner = inner
+
+	async def __call__(self, scope: Scope, receive: Receive, send: AsgiSend) -> None:
+		headers = {k.decode().lower(): v.decode() for k, v in scope.get('headers', [])}
+		bearer = headers.get('authorization', '').removeprefix('Bearer ').strip()
+		if not auth.token_ok(bearer) or not auth.origin_ok(headers.get('origin')):
+			await PlainTextResponse('bad or missing token', status_code=401)(scope, receive, send)
+			return
+		await self.inner(scope, receive, send)
+
+
+def create_app(ws: Workspace, port: int = 0) -> FastAPI:
+	# nkqa's MCP tools, served to the `claude` processes the chat spawns. In this process rather
+	# than a `qa mcp` child, so their asks reach this window's modal instead of an OS dialog, the
+	# browser they drive streams to the live pane, and one workspace has exactly one owner.
+	relay = Relay()
+	mcp_session = mcp_server.Session(dialogs=relay, live=relay)
+	mcp_session.use(ws)
+	mcp = mcp_server.build_server(mcp_session)
+	mcp.streamable_http_app()  # creates the session manager the lifespan runs
+
+	@asynccontextmanager
+	async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+		async with mcp.session_manager.run():
+			yield
+		await mcp_session.close()
+
+	app = FastAPI(title='nkqa sidecar', docs_url=None, redoc_url=None, lifespan=lifespan)
+	app.router.routes.append(Route('/mcp', endpoint=Guarded(StreamableHTTPASGIApp(mcp.session_manager))))
 	# The UI is always a different origin from this port - tauri://localhost in the app,
 	# http://127.0.0.1:1420 while developing - so without this every fetch is blocked by
 	# the browser before the token is even looked at. The allowlist is the same one auth
@@ -140,27 +181,35 @@ def create_app(ws: Workspace) -> FastAPI:
 	)
 	app.state.workspace = ws
 	app.state.jobs = JobRunner()
+	app.state.relay = relay
+	app.state.mcp_session = mcp_session
+	app.state.port = port
 	guard = [Depends(auth.require_token)]
 
 	@app.get('/health', dependencies=guard)
-	def health() -> dict[str, Any]:
+	async def health(recheck: bool = False) -> dict[str, Any]:
 		from importlib.metadata import version as pkg_version
 
-		from nkqa.models import ROLES, describe_role
-
-		cfg = config_mod.load(ws.config_file)
-		roles: dict[str, dict[str, Any]] = {}
-		for role in ROLES:
-			name, provider, _keys, missing = describe_role(cfg, role)
-			roles[role] = {'model': name, 'provider': provider, 'missing_keys': missing}
 		return {
 			'nkqa': pkg_version('nkqa'),
 			'browser_use': pkg_version('browser-use'),
 			'workspace': str(ws.root),
-			'models_ok': all(not role_info['missing_keys'] for role_info in roles.values()),
-			'roles': roles,
+			'claude': await claude.status(recheck),
 			'busy': app.state.jobs.busy,
 		}
+
+	@app.post('/claude/login', dependencies=guard)
+	async def claude_login() -> dict[str, bool]:
+		await claude.login()
+		return {'ok': True}
+
+	@app.post('/open/{which}', dependencies=guard)
+	def open_page(which: str) -> dict[str, bool]:
+		"""Two fixed pages and nothing else: a URL from the webview is never opened as given."""
+		url = claude.URLS.get(which)
+		if url is None:
+			raise HTTPException(status_code=404, detail=f'no page "{which}"')
+		return {'ok': webbrowser.open(url)}
 
 	@app.get('/workspace', dependencies=guard)
 	def workspace_state() -> dict[str, Any]:
@@ -231,14 +280,16 @@ def create_app(ws: Workspace) -> FastAPI:
 
 	@app.get('/chats', dependencies=guard)
 	def all_chats() -> dict[str, Any]:
-		return {'chats': chats_mod.list_chats(ws)}
+		return {'chats': claude.list_sessions(ws.root, claude.read_titles(ws.chat_titles_file))}
 
 	@app.get('/chats/{chat_id}', dependencies=guard)
 	def one_chat(chat_id: str) -> dict[str, Any]:
-		chat = chats_mod.load(ws, chat_id)
-		if chat is None:
+		messages = claude.load_session(ws.root, chat_id)
+		if messages is None:
 			raise HTTPException(status_code=404, detail=f'no chat "{chat_id}"')
-		return asdict(chat)
+		chats = claude.list_sessions(ws.root, claude.read_titles(ws.chat_titles_file))
+		title = next((c['title'] for c in chats if c['id'] == chat_id), '')
+		return {'id': chat_id, 'title': title, 'messages': messages}
 
 	@app.get('/artifacts/{relative:path}', dependencies=guard)
 	def artifact(relative: str) -> FileResponse:
@@ -250,7 +301,7 @@ def create_app(ws: Workspace) -> FastAPI:
 			await socket.close(code=4401)
 			return
 		await socket.accept()
-		await _serve(socket, ws, app.state.jobs)
+		await _serve(socket, app)
 
 	return app
 
@@ -259,7 +310,7 @@ async def _send(socket: WebSocket, frame: dict[str, Any]) -> None:
 	await socket.send_text(json.dumps(frame, default=str))
 
 
-def build_context(ws: Workspace, channel: SocketChannel) -> ShellContext:
+def build_context(ws: Workspace, channel: SocketChannel, hitl: HumanInTheLoop | None = None) -> ShellContext:
 	"""One session's state. Extracted so the vault wiring below is testable."""
 	return ShellContext(
 		ws=ws,
@@ -267,17 +318,33 @@ def build_context(ws: Workspace, channel: SocketChannel) -> ShellContext:
 		# The vault is not optional here: without it `_from_vault` short-circuits on every
 		# call and each stored credential falls through to "type it again", origin binding
 		# included - which is how the whole release chain was dead over the socket.
-		hitl=HumanInTheLoop(ws.permissions_file, channel, Vault(ws)),
+		hitl=hitl or HumanInTheLoop(ws.permissions_file, channel, Vault(ws)),
 		channel=channel,
 	)
 
 
-async def _serve(socket: WebSocket, ws: Workspace, jobs: JobRunner) -> None:
+def forget(hitl: HumanInTheLoop) -> None:
+	"""A closed window ends the session: what was granted or typed in it goes too."""
+	hitl.secrets.clear()
+	hitl.session_grants.clear()
+	hitl.session_credentials.clear()
+	hitl.autonomy = 'ask'
+
+
+async def _serve(socket: WebSocket, app: FastAPI) -> None:
+	ws: Workspace = app.state.workspace
+	jobs: JobRunner = app.state.jobs
+	relay: Relay = app.state.relay
+
 	async def send(frame: dict[str, Any]) -> None:
 		await _send(socket, frame)
 
 	channel = SocketChannel(send)
-	ctx = build_context(ws, channel)
+	# One HITL for this window and the Claude it talks to, so the autonomy picker and a
+	# credential typed once cover the MCP tools too. The relay makes their asks this window's.
+	ctx = build_context(ws, channel, app.state.mcp_session.require_hitl())
+	relay.target = channel
+	claude_turn = ClaudeTurn(ws, f'http://127.0.0.1:{app.state.port}/mcp', send)
 	watchers: set[asyncio.Task[None]] = set()
 	try:
 		while True:
@@ -293,7 +360,7 @@ async def _serve(socket: WebSocket, ws: Workspace, jobs: JobRunner) -> None:
 					channel.abandon()
 				await send({'type': 'cancelled', 'job': frame.get('id', ''), 'ok': ok})
 			elif kind in ('command', 'say'):
-				task = await _launch(frame, ctx, channel, jobs, send, ws)
+				task = await _launch(frame, ctx, channel, jobs, send, ws, claude_turn)
 				if task is not None:
 					watchers.add(task)
 					task.add_done_callback(watchers.discard)
@@ -305,7 +372,42 @@ async def _serve(socket: WebSocket, ws: Workspace, jobs: JobRunner) -> None:
 		channel.abandon()  # a closed window must never leave a run waiting on an answer
 		for task in watchers:
 			task.cancel()
-		ctx.hitl.secrets.clear()  # session secrets die with the session
+		if relay.target is channel:
+			relay.target = None
+		forget(ctx.hitl)
+
+
+class ClaudeTurn:
+	"""What a `say` needs to become a `claude -p` turn."""
+
+	def __init__(self, ws: Workspace, mcp_url: str, send: Any):
+		self.ws, self.mcp_url, self.send = ws, mcp_url, send
+		self.naming: set[asyncio.Task[None]] = set()
+
+	async def start(self, text: str, chat_id: str, job_id: str) -> tuple[str, Any]:
+		"""(session id, the job's coroutine). A new chat gets its id before Claude says a word,
+		so the window can select it while the first reply is still streaming."""
+		new = not claude.SESSION_ID.match(chat_id)
+		if new:
+			chat_id = str(uuid.uuid4())
+			await self.send({'type': 'chat', 'id': chat_id, 'title': ''})
+
+		async def work() -> int:
+			code = await claude.turn(self.ws.root, text, chat_id, self.mcp_url, auth.current(), self.send, job_id)
+			if new and code == 0:
+				# After the result, not before it: a title is not worth holding up the reply.
+				task = asyncio.create_task(self.name(chat_id, text))
+				self.naming.add(task)
+				task.add_done_callback(self.naming.discard)
+			return code
+
+		return chat_id, work()
+
+	async def name(self, chat_id: str, first_message: str) -> None:
+		title = await claude.make_title(first_message)
+		if title:
+			claude.save_title(self.ws.chat_titles_file, chat_id, title)
+			await self.send({'type': 'chat', 'id': chat_id, 'title': title})
 
 
 async def _attach_chat(ctx: ShellContext, ws: Workspace, chat_id: str, send: Any) -> None:
@@ -326,6 +428,7 @@ async def _launch(
 	jobs: JobRunner,
 	send: Any,
 	ws: Workspace,
+	claude_turn: 'ClaudeTurn | None' = None,
 ) -> 'asyncio.Task[None] | None':
 	job_id = str(frame.get('id', ''))
 	line = ''
@@ -335,10 +438,11 @@ async def _launch(
 		if not text:
 			await send({'type': 'result', 'job': job_id, 'code': 2, 'error': 'empty message'})
 			return None
-		await _attach_chat(ctx, ws, str(frame.get('chat', '')), send)
-		from nkqa.shell.agent import route
-
-		name, work = 'say', route(ctx, text)
+		if claude_turn is None:
+			await send({'type': 'result', 'job': job_id, 'code': 2, 'error': 'chat is not available here'})
+			return None
+		_chat, work = await claude_turn.start(text, str(frame.get('chat', '')), job_id)
+		name = 'say'
 	else:
 		# Two wire forms. Buttons send name+args; a slash line typed in the chat box sends
 		# `line` and is parsed by `parse_slash` - the terminal's own parser, so the grammar

@@ -6,12 +6,14 @@
  */
 
 import { wsUrl } from './connection'
-import type { AskFrame, Connection, EventFrame, ImageFrame, ServerFrame } from './types'
+import type { AskFrame, ClaudeMessage, Connection, EventFrame, ImageFrame, ServerFrame } from './types'
 
 export interface Job {
 	id: string
 	name: string
 	events: EventFrame[]
+	/** What Claude streamed, for a chat turn. Empty for anything else. */
+	messages: ClaudeMessage[]
 	code: number | null
 	cancelled: boolean
 	error: string
@@ -86,6 +88,7 @@ export class Session {
 					id: frame.job,
 					name: frame.name,
 					events: [],
+					messages: [],
 					code: null,
 					cancelled: false,
 					error: '',
@@ -99,7 +102,14 @@ export class Session {
 				const job = this.jobs.get(frame.job)
 				if (!job) break
 				job.events.push(frame)
-				this.handlers.onJob?.({ ...job, events: [...job.events] })
+				this.handlers.onJob?.({ ...job, events: [...job.events], messages: [...job.messages] })
+				break
+			}
+			case 'claude': {
+				const job = this.jobs.get(frame.job)
+				if (!job) break
+				job.messages.push(frame.msg)
+				this.handlers.onJob?.({ ...job, messages: [...job.messages] })
 				break
 			}
 			case 'frame':
@@ -113,6 +123,7 @@ export class Session {
 					id: frame.job,
 					name: '',
 					events: [],
+					messages: [],
 					code: null,
 					cancelled: false,
 					error: '',
@@ -123,7 +134,7 @@ export class Session {
 				job.error = frame.error ?? ''
 				job.done = true
 				this.jobs.set(frame.job, job)
-				this.handlers.onJob?.({ ...job, events: [...job.events] })
+				this.handlers.onJob?.({ ...job, events: [...job.events], messages: [...job.messages] })
 				break
 			}
 			case 'cancelled':

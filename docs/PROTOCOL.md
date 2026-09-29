@@ -75,12 +75,15 @@ A loopback port is reachable by every browser tab on the machine.
 
 | Route | Returns |
 |---|---|
-| `GET /health` | `nkqa` and `browser_use` versions, `workspace`, `busy`, and `roles` — per model role: `model`, `provider`, `missing_keys`. `models_ok` is true when no role is missing a key. This is the "is this workspace ready to run" check. |
+| `GET /health` | `nkqa` and `browser_use` versions, `workspace`, `busy`, and `claude`: `path` (`""` if not installed), `version`, `logged_in`, `auth_method`, `plan`, and `ready` — signed in and paying (a Pro/Max/Team/Enterprise plan, API billing, or a cloud provider). This is the "can chat work" check; the desktop shows install / sign-in / upgrade until `ready`. Cached 60 s; `?recheck=true` asks `claude auth status` again. Email and org ids never leave the sidecar. |
 | `GET /workspace` | `app_name`, `base_url`, `headless`, `models` (role → tier or model id), `aliases` (the `smart`/`fast` tiers), `providers` (see below), `appmap` (relative .md paths), `scenarios` (see below), `runs` (newest first), `commands` (see §6). Everything the project shell needs on open. |
 | `GET /scenarios/{id}` | One scenario plus `body`, the raw markdown. `404` if unknown. |
 | `GET /runs/{name}` | `steps` (a count), `result` (the parsed `results.json`, or null), `artifacts` (`report`/`gif`/`history` → artifact URLs), `videos`, `shots` (per-step screenshots) and `conversation` (the LLM transcript) — all artifact URLs, in step order. |
-| `GET /chats` | `chats`: id, title, created, updated, turn count — newest first. |
-| `GET /chats/{id}` | One conversation with all its turns. `404` if unknown. |
+| `GET /chats` | `chats`: id, title, updated, turn count — newest first. These are **Claude Code's own sessions** for the workspace folder (`~/.claude/projects/<cwd, non-alphanumerics → '-'>/*.jsonl`), terminal ones included. Title: one set with `/rename`, else Claude's `ai-title`, else the one the desktop asked Claude for (`.nkqa/chat-titles.json` — `claude -p` writes none itself), else the first message. |
+| `GET /chats/{id}` | `id`, `title`, `messages`: the user/assistant messages from the session file, in the same shape `claude -p --output-format stream-json` emits, so one renderer draws both. `404` if unknown or not a session id. |
+| `POST /claude/login` | Starts `claude auth login`, which opens the browser sign-in. Returns at once; re-check `/health`. |
+| `POST /open/{install\|upgrade}` | Opens one of two fixed pages in the system browser. Nothing else is accepted. |
+| `/mcp` | nkqa's MCP tools over streamable HTTP, for the `claude` processes chat spawns. Bearer token required, like everything else. |
 | `GET /artifacts/{path}` | A file from inside the workspace. |
 
 A scenario looks like:
@@ -161,12 +164,18 @@ all come out the same. A parse failure is a `result` with code `2` carrying the 
 message. Include `chat` when the line was typed in the chat box and the command and its exit
 code are recorded as turns, so a transcript has no unexplained holes where work happened.
 
-`say` is what the Chat view sends: plain English, routed through the same agent the
-terminal shell uses. It runs as a job like any command, so it streams events and can be
-cancelled. Omit `chat` and the server opens a new one and tells you its id (see the `chat`
-frame below); pass one to continue it. Turns are appended to `chats/<id>.json` in the
-workspace — what the agent *said* and what it *ran*, so the transcript is reviewable in a
-PR. The router still cannot approve.
+`say` is what the Chat view sends: one turn of the user's own **Claude Code**, spawned as
+`claude -p --output-format stream-json` in the workspace folder and pointed at this sidecar's
+`/mcp` — so nkqa calls no model and needs no API key. It runs as a job like any command and
+can be cancelled (the process is killed). Omit `chat` and the server makes a session id and
+tells you (a `chat` frame, before Claude says anything); pass one to continue it with
+`--resume`. Claude gets nkqa's tools plus read-only `Read`/`Glob`/`Grep`; shell, edits and web
+access are denied. It still cannot approve: approval asks the window, like every gate.
+
+The MCP tools share this window's HumanInTheLoop and ask through it, so a permission or a
+credential Claude asks for arrives as an ordinary `ask` frame, and the browser Claude drives
+streams `frame`s. Closing the window ends that session: grants, typed credentials and the
+autonomy mode are forgotten.
 
 `args` values may be strings, numbers or booleans; the server coerces them to each
 parameter's declared type and silently drops names the command doesn't have.
@@ -181,10 +190,15 @@ parameter's declared type and silently drops names the command doesn't have.
                       "key": "password", "options": [], "body": "", "interrupt": true}
 {"type": "result",    "job": "c1", "code": 0, "cancelled": false}
 {"type": "cancelled", "job": "c1", "ok": true}
-{"type": "chat",      "id": "20260904-141230", "title": ""}
+{"type": "chat",      "id": "<session uuid>", "title": ""}
+{"type": "claude",    "job": "s1", "msg": {"type": "assistant", "message": {"content": [{"type": "text", "text": "…"}]}}}
 {"type": "frame",     "job": "c1", "image": "<base64 jpeg>", "format": "jpeg", "width": 1280, "height": 800}
 {"type": "error",     "message": "unknown frame type 'wat'"}
 ```
+
+**`chat`** comes twice for a new chat: with an empty `title` when the session is created (select
+it), and again with Claude's title once the first reply is in (refresh the list). **`claude`**
+is one line of Claude's stream, verbatim.
 
 **`frame`** is the live browser view, and it is its own message type rather than an event:
 at 20 fps the envelope and an empty `text` field per frame actually cost something. Render

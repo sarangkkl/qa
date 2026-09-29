@@ -1,4 +1,17 @@
 import { listen } from '@tauri-apps/api/event'
+import {
+	ListChecks,
+	Map as MapIcon,
+	MessageSquare,
+	Monitor,
+	Moon,
+	PanelRight,
+	PlayCircle,
+	Settings,
+	Sun,
+	Workflow,
+	type LucideIcon,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from './api/client'
 import {
@@ -13,8 +26,10 @@ import {
 import { Session, type Job } from './api/socket'
 import type { AskFrame, Autonomy, Connection, Health, ImageFrame, WorkspaceState } from './api/types'
 import { AskModal } from './components/AskModal'
+import { THEMES, useTheme, type Theme } from './theme'
 import { AppMap } from './views/AppMap'
-import { Chat } from './views/Chat'
+import { Chat, type Turn } from './views/Chat'
+import { ClaudeGate } from './views/ClaudeGate'
 import { Credentials } from './views/Credentials'
 import { LivePane } from './views/LivePane'
 import { Runs } from './views/Runs'
@@ -22,14 +37,32 @@ import { Scenarios } from './views/Scenarios'
 import { WorkspacePicker } from './views/WorkspacePicker'
 
 type Tab = 'chat' | 'scenarios' | 'appmap' | 'flows' | 'runs' | 'settings'
-const TABS: { id: Tab; label: string }[] = [
-	{ id: 'chat', label: 'Chat' },
-	{ id: 'scenarios', label: 'Scenarios' },
-	{ id: 'appmap', label: 'App map' },
-	{ id: 'flows', label: 'Flows' },
-	{ id: 'runs', label: 'Runs' },
-	{ id: 'settings', label: 'Settings' },
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+	{ id: 'chat', label: 'Chat', icon: MessageSquare },
+	{ id: 'scenarios', label: 'Scenarios', icon: ListChecks },
+	{ id: 'appmap', label: 'App map', icon: MapIcon },
+	{ id: 'flows', label: 'Flows', icon: Workflow },
+	{ id: 'runs', label: 'Runs', icon: PlayCircle },
 ]
+const THEME_ICON: Record<Theme, LucideIcon> = { system: Monitor, light: Sun, dark: Moon }
+const SIDE_KEY = 'nkqa.side'
+
+function remembered(key: string, fallback: boolean): boolean {
+	try {
+		const value = localStorage.getItem(key)
+		return value === null ? fallback : value === '1'
+	} catch {
+		return fallback
+	}
+}
+
+function remember(key: string, value: boolean): void {
+	try {
+		localStorage.setItem(key, value ? '1' : '0')
+	} catch {
+		// unavailable storage only costs the preference, not the layout
+	}
+}
 
 export default function App() {
 	const [connection, setConnection] = useState<Connection | null>(null)
@@ -44,6 +77,8 @@ export default function App() {
 	const [ask, setAsk] = useState<AskFrame | null>(null)
 	const [frame, setFrame] = useState<ImageFrame | null>(null)
 	const [chatId, setChatId] = useState('')
+	// Bumped when Claude names a chat, so the list and the header pick the title up.
+	const [titleTick, setTitleTick] = useState(0)
 	const [online, setOnline] = useState(false)
 	const [status, setStatus] = useState('')
 	// Session-scoped, exactly like the server's own copy: a new socket is a new session with
@@ -52,10 +87,17 @@ export default function App() {
 	const [stopping, setStopping] = useState('')
 	// A window the File menu opened to choose a folder should not make you click Open again.
 	const [autoPick, setAutoPick] = useState(0)
+	const [sideOpen, setSideOpen] = useState(() => remembered(SIDE_KEY, true))
+	const [liveOpen, setLiveOpen] = useState(false)
+	// Which scenario the Scenarios view should show when a chat card says "Open".
+	const [focus, setFocus] = useState('')
+	const [theme, setTheme] = useTheme()
 	const session = useRef<Session | null>(null)
-	// A job id is opaque; the view that started a job owns it. This lives here, not in Chat,
-	// because Chat unmounts on every tab switch and a running job must not vanish with it.
-	const mine = useRef(new Set<string>())
+	// Each chat turn's chat and text, by job id. Lives here, not in Chat, because Chat unmounts
+	// on every tab switch and a turn in flight must not vanish with it.
+	const turns = useRef(new Map<string, Turn>())
+	// The live pane opened itself for a run, so it may close itself after; one you opened stays.
+	const autoLive = useRef(false)
 
 	const open = (workspace: string, init?: InitOptions) => {
 		setOpenError('')
@@ -87,6 +129,11 @@ export default function App() {
 		api.health(connection).then(setHealth).catch(() => undefined)
 	}, [connection])
 
+	const recheck = useCallback(async () => {
+		if (!connection) return
+		await api.health(connection, true).then(setHealth).catch(() => undefined)
+	}, [connection])
+
 	useEffect(() => {
 		if (!connection) return
 		const live = new Session(connection, {
@@ -100,10 +147,22 @@ export default function App() {
 				// Without this the last JPEG of a finished run stays on the stage forever,
 				// looking live while the header correctly says idle.
 				setFrame(null)
+				// A turn that failed may have failed on sign-in or plan: look again, and the gate
+				// takes over the chat if that is what happened.
+				if (job.name === 'say' && job.code !== 0 && !job.cancelled) {
+					void api.health(connection, true).then(setHealth).catch(() => undefined)
+				}
 			},
 			onAsk: setAsk,
 			onFrame: setFrame,
-			onChat: (id) => setChatId(id),
+			onChat: (id, title) => {
+				if (!title) {
+					// A new chat: the turn that opened it was sent with no chat id.
+					for (const turn of turns.current.values()) if (!turn.chat) turn.chat = id
+					setChatId(id)
+				}
+				setTitleTick((n) => n + 1)
+			},
 			onCancelled: (_jobId, ok) => {
 				if (ok) return
 				setStopping('')
@@ -131,6 +190,21 @@ export default function App() {
 	// never-finished job used to sit at the head and Stop would send its id.
 	const running = useMemo(() => [...jobs].reverse().find((j) => !j.done) ?? null, [jobs])
 	const busy = running !== null
+	const ready = health?.claude?.ready ?? true
+
+	useEffect(() => {
+		if (frame && !liveOpen) {
+			autoLive.current = true
+			setLiveOpen(true)
+		}
+	}, [frame, liveOpen])
+
+	useEffect(() => {
+		if (!running && autoLive.current) {
+			autoLive.current = false
+			setLiveOpen(false)
+		}
+	}, [running])
 
 	const stop = useCallback((id: string) => {
 		setStopping(id)
@@ -151,18 +225,55 @@ export default function App() {
 			.catch((e: Error) => setStatus(e.message))
 	}, [connection])
 
-	// One global stop, because the run you want to end is not always on the tab you are on -
-	// and while an ask modal is up its backdrop covers every button in the window.
+	const say = useCallback(
+		(text: string) => {
+			const s = session.current
+			if (!s) return
+			setTab('chat')
+			const id = s.say(text, chatId || undefined)
+			turns.current.set(id, { chat: chatId, text })
+		},
+		[chatId],
+	)
+
+	const approve = useCallback((id: string) => session.current?.command('approve', { id }), [])
+
+	const openScenario = useCallback((id: string) => {
+		setFocus(id)
+		setTab('scenarios')
+	}, [])
+
+	const toggleSide = useCallback(() => {
+		setSideOpen((open) => {
+			remember(SIDE_KEY, !open)
+			return !open
+		})
+	}, [])
+
+	const toggleLive = useCallback(() => {
+		autoLive.current = false
+		setLiveOpen((open) => !open)
+	}, [])
+
+	// ⌘. stops whatever runs, from any tab - the run you want to end is not always on the tab
+	// you are on, and an ask modal's backdrop covers every button in the window.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === '.' && (e.metaKey || e.ctrlKey) && running) {
-				e.preventDefault()
-				stop(running.id)
-			}
+			if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
+			const key = e.key.toLowerCase()
+			if (key === '.' && running) stop(running.id)
+			else if (key === 'b') toggleSide()
+			else if (key === 'j') toggleLive()
+			else if (key === 'n') {
+				setTab('chat')
+				setChatId('')
+			} else return
+			e.preventDefault()
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [running, stop])
+	}, [running, stop, toggleSide, toggleLive])
+
 	// The menu is app-wide, so each window decides for itself what a File verb means: a window
 	// still on the picker opens in place, a window that already has a workspace hands the job
 	// to a new one. Two workspaces in one window is exactly what this design refuses to build.
@@ -184,8 +295,8 @@ export default function App() {
 		return () => void subs.then((offs) => offs.forEach((off) => off()))
 	}, [connection])
 
-	// Jira drives three surfaces (plan from a ticket, file a bug, sign in). If it is not
-	// configured, those controls are absent rather than present-and-broken.
+	// Jira drives two surfaces (file a bug, sign in). If it is not configured, those controls
+	// are absent rather than present-and-broken.
 	const hasJira = useMemo(() => (state?.connectors ?? []).some((c) => c.name === 'jira'), [state])
 
 	// `connection && !state` is the gap after the handshake while /workspace is still loading:
@@ -206,73 +317,76 @@ export default function App() {
 		setAsk(null)
 	}
 
+	// Clicking the tab you are on folds its list away, as in VS Code.
+	const pick = (id: Tab) => {
+		if (id === tab) toggleSide()
+		else {
+			setTab(id)
+			if (!sideOpen) toggleSide()
+		}
+	}
+
+	const ThemeIcon = THEME_ICON[theme]
+	const nextTheme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length] ?? 'system'
+
 	return (
-		<div className="app">
-			<nav className="sidebar">
-				<div className="brand">
-					<strong>{state.app_name}</strong>
-					<span className="row-sub">{state.base_url || state.root}</span>
+		<div className={`app ${sideOpen ? '' : 'side-hidden'} ${liveOpen ? 'live-shown' : ''}`}>
+			<nav className="activity">
+				<div className="activity-brand" title={`${state.app_name}\n${state.base_url || state.root}`}>
+					{(state.app_name || 'QA').slice(0, 2).toUpperCase()}
 				</div>
-				{TABS.map((t) => (
-					<button key={t.id} className={`tab ${tab === t.id ? 'tab-on' : ''}`} onClick={() => setTab(t.id)}>
-						{t.label}
+				{TABS.map(({ id, label, icon: Icon }) => (
+					<button
+						key={id}
+						className={`activity-btn ${tab === id ? 'activity-on' : ''}`}
+						title={label}
+						aria-label={label}
+						onClick={() => pick(id)}
+					>
+						<Icon size={22} strokeWidth={1.6} />
 					</button>
 				))}
-				<div className="sidebar-foot">
-					<label className="autonomy">
-						<span className="row-sub">Autonomy</span>
-						<select
-							value={autonomy}
-							disabled={!online}
-							title={
-								'How the agent answers its own permission requests, for this session only.\n' +
-								'It governs actions the agent declares risky. It is not a sandbox.'
-							}
-							onChange={(e) => {
-								const value = e.target.value as Autonomy
-								setAutonomy(value)
-								session.current?.command('mode', { value })
-							}}
-						>
-							<option value="refuse">Careful — refuse risky actions</option>
-							<option value="ask">Ask every time</option>
-							<option value="allow">Auto — allow risky actions</option>
-						</select>
-					</label>
-					{autonomy !== 'ask' && (
-						<span className="warn">
-							{autonomy === 'allow' ? 'granting without asking' : 'refusing without asking'}
-						</span>
-					)}
-					<span className={online ? 'good' : 'bad'}>{online ? '● connected' : '○ ' + (status || 'offline')}</span>
-					{health && <span className="row-sub">nkqa {health.nkqa}</span>}
-					{health && !health.models_ok && <span className="bad">a model key is missing</span>}
-				</div>
+				<button
+					className={`activity-btn activity-foot ${tab === 'settings' ? 'activity-on' : ''}`}
+					title="Settings"
+					aria-label="Settings"
+					onClick={() => setTab('settings')}
+				>
+					<Settings size={22} strokeWidth={1.6} />
+				</button>
 			</nav>
 
 			<main className="main">
-				{tab === 'chat' && session.current && (
+				{tab === 'chat' && health && !ready && (
+					<ClaudeGate connection={connection} claude={health.claude} onRecheck={recheck} />
+				)}
+				{tab === 'chat' && ready && (
 					<Chat
 						connection={connection}
-						session={session.current}
+						state={state}
 						jobs={jobs}
 						chatId={chatId}
-						commands={state.commands}
-						mine={mine}
-						stopping={stopping}
-						onStop={stop}
-						onForce={force}
+						turns={turns}
+						titleTick={titleTick}
+						busy={busy}
+						running={running}
+						canRun={ready}
 						onChat={setChatId}
+						onSay={say}
+						onStop={stop}
+						onApprove={approve}
+						onOpenScenario={openScenario}
 					/>
 				)}
-				{tab === 'scenarios' && session.current && (
+				{tab === 'scenarios' && (
 					<Scenarios
 						connection={connection}
-						session={session.current}
 						scenarios={state.scenarios}
 						busy={busy}
-						hasJira={hasJira}
-						onChanged={refresh}
+						canRun={ready}
+						focus={focus}
+						onApprove={approve}
+						onRun={(id) => say(`Run the approved scenario ${id}.`)}
 					/>
 				)}
 				{tab === 'appmap' && <AppMap connection={connection} files={state.appmap} flowsOnly={false} />}
@@ -287,26 +401,64 @@ export default function App() {
 					/>
 				)}
 				{tab === 'settings' && session.current && (
-					<Credentials
-						session={session.current}
-						jobs={jobs}
-						health={health}
-						state={state}
-						connectors={state.connectors}
-						busy={busy}
-					/>
+					<Credentials session={session.current} jobs={jobs} connectors={state.connectors} busy={busy} />
 				)}
 			</main>
 
-			<LivePane
-				connection={connection}
-				frame={frame}
-				jobs={jobs}
-				running={running}
-				stopping={stopping}
-				onStop={stop}
-				onForce={force}
-			/>
+			{liveOpen && (
+				<LivePane
+					connection={connection}
+					frame={frame}
+					jobs={jobs}
+					running={running}
+					stopping={stopping}
+					onStop={stop}
+					onForce={force}
+					onClose={toggleLive}
+				/>
+			)}
+
+			<footer className="statusbar">
+				<span className={online ? 'good' : 'bad'}>{online ? '● connected' : `○ ${status || 'offline'}`}</span>
+				<span className="status-clip" title={state.root}>
+					{state.app_name || 'workspace'}
+				</span>
+				{running && <span className="status-run">● {running.name === 'say' ? 'Claude is working' : running.name}</span>}
+				<span className="status-grow" />
+				{health?.claude?.path && (
+					<span title={health.claude.path}>
+						Claude Code {health.claude.version}
+						{health.claude.plan ? ` · ${health.claude.plan}` : ''}
+					</span>
+				)}
+				<label
+					className="status-autonomy"
+					title={
+						'How risky actions are answered, for this session only.\n' +
+						'It governs actions the agent declares risky. It is not a sandbox.'
+					}
+				>
+					<select
+						value={autonomy}
+						disabled={!online}
+						onChange={(e) => {
+							const value = e.target.value as Autonomy
+							setAutonomy(value)
+							session.current?.command('mode', { value })
+						}}
+					>
+						<option value="refuse">Careful — refuse risky actions</option>
+						<option value="ask">Ask before risky actions</option>
+						<option value="allow">Auto — allow risky actions</option>
+					</select>
+				</label>
+				<button className="status-btn" title={`Theme: ${theme} (click for ${nextTheme})`} onClick={() => setTheme(nextTheme)}>
+					<ThemeIcon size={14} />
+				</button>
+				<button className={`status-btn ${liveOpen ? 'status-on' : ''}`} title="Live browser (⌘J)" onClick={toggleLive}>
+					<PanelRight size={14} />
+				</button>
+			</footer>
 
 			{ask && (
 				<AskModal

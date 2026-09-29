@@ -61,8 +61,55 @@ def test_create_without_details_is_the_untouched_template(tmp_path: Path) -> Non
 def test_create_is_idempotent(tmp_path: Path) -> None:
 	ws = workspace.create(tmp_path)
 	ws.config_file.write_text('app:\n  name: Edited\n')
+	(tmp_path / 'AGENTS.md').write_text('my own notes\n')
 	workspace.create(tmp_path)
 	assert 'Edited' in ws.config_file.read_text()
+	assert (tmp_path / 'AGENTS.md').read_text() == 'my own notes\n'
+
+
+AGENT_FILES = ('AGENTS.md', 'CLAUDE.md', '.mcp.json', '.cursor/mcp.json')
+
+
+def test_create_writes_the_agent_files(tmp_path: Path) -> None:
+	"""Any agent opening the folder should learn the job without being told."""
+	from nkqa.prompts import INSTRUCTIONS, QA_RULES_MCP
+
+	workspace.create(tmp_path, 'Shop', 'https://dev.shop.test')
+	for name in AGENT_FILES:
+		assert (tmp_path / name).is_file(), name
+
+	agents = (tmp_path / 'AGENTS.md').read_text()
+	assert 'Shop' in agents and 'https://dev.shop.test' in agents
+	# Interpolated, not retyped: if either block is ever pasted in by hand, this fails.
+	assert INSTRUCTIONS.strip() in agents
+	assert QA_RULES_MCP.strip() in agents
+	# An import, not a mention: Claude Code skips its native AGENTS.md read whenever a CLAUDE.md
+	# exists, so a pointer that only *asks* would leave the brief unread.
+	assert (tmp_path / 'CLAUDE.md').read_text().startswith('@AGENTS.md\n')
+
+	for name in ('.mcp.json', '.cursor/mcp.json'):
+		server = json.loads((tmp_path / name).read_text())['mcpServers']['nkqa']
+		assert server['command'] == 'uvx' and 'qa' in server['args'] and 'mcp' in server['args']
+
+
+def test_create_never_overwrites_the_agent_files(tmp_path: Path) -> None:
+	"""The folder is usually the app's own repo - it may already have a CLAUDE.md or an .mcp.json."""
+	for name in AGENT_FILES:
+		path = tmp_path / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text('do not touch\n')
+
+	workspace.create(tmp_path, 'Shop', 'https://dev.shop.test')
+
+	for name in AGENT_FILES:
+		assert (tmp_path / name).read_text() == 'do not touch\n', name
+
+
+def test_agent_files_survive_a_workspace_with_no_app_details(tmp_path: Path) -> None:
+	workspace.create(tmp_path)
+	agents = (tmp_path / 'AGENTS.md').read_text()
+	assert 'None' not in agents
+	assert 'read_appmap' in agents and 'request_permission' in agents and 'approve_scenario' in agents
 
 
 def test_scenario_run_dir_is_the_shape_latest_run_dir_globs(tmp_path: Path) -> None:

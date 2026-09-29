@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from nkqa import config as config_mod
+from nkqa import prompts
 from nkqa import scenarios as scenarios_mod
 from nkqa import workspace as workspace_mod
 from nkqa.config import Config
@@ -43,6 +44,14 @@ async def init(ch: Channel, root: Path | None = None, app_name: str = '', base_u
 	ws = workspace_mod.create(root or Path.cwd(), app_name, base_url)
 	await ch.log(f'✅ QA workspace ready at {ws.root}')
 	await ch.log(f'   Edit {ws.config_file.name} (app URL, models), then:  qa plan "<what to test>"')
+
+	# A CLAUDE.md we did not write blocks both routes to AGENTS.md: Claude Code skips the native
+	# read when any CLAUDE.md exists, and theirs has no import. Only the human can fix that.
+	if prompts.CLAUDE_IMPORT not in (ws.root / 'CLAUDE.md').read_text(encoding='utf-8'):
+		await ch.log(
+			f'   ⚠️  This folder already had its own CLAUDE.md. Add a line "{prompts.CLAUDE_IMPORT}" to it,\n'
+			'      or your agent will not see the QA brief in AGENTS.md.'
+		)
 
 	old_output = ws.root / 'qa_output'
 	recordings = workspace_mod.prototype_recordings(old_output)

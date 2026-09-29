@@ -14,7 +14,7 @@ async function get<T>(c: Connection, path: string): Promise<T> {
 	return (await response.json()) as T
 }
 
-export const health = (c: Connection) => get<Health>(c, '/health')
+export const health = (c: Connection, recheck = false) => get<Health>(c, `/health${recheck ? '?recheck=true' : ''}`)
 export const workspace = (c: Connection) => get<WorkspaceState>(c, '/workspace')
 export const scenario = (c: Connection, id: string) => get<ScenarioDetail>(c, `/scenarios/${id}`)
 export const run = (c: Connection, name: string) => get<RunDetail>(c, `/runs/${encodeURIComponent(name)}`)
@@ -29,3 +29,16 @@ export async function text(c: Connection, path: string): Promise<string> {
 	if (!response.ok) throw new Error(`${path} → ${response.status}`)
 	return await response.text()
 }
+
+async function post(c: Connection, path: string): Promise<void> {
+	const response = await fetch(`${httpBase(c)}${path}`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${c.token}` },
+	})
+	if (!response.ok) throw new Error(`${path} → ${response.status}`)
+}
+
+/** Opens the browser sign-in. It finishes when the human does; re-check health afterwards. */
+export const claudeLogin = (c: Connection) => post(c, '/claude/login')
+/** The sidecar opens it: the webview has no way to hand a URL to the system browser. */
+export const openPage = (c: Connection, which: 'install' | 'upgrade') => post(c, `/open/${which}`)

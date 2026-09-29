@@ -11,7 +11,7 @@ from nkqa.scenarios import Scenario, Step
 
 
 def test_jira_server_requires_config() -> None:
-	with pytest.raises(RuntimeError, match='mcp-remote'):
+	with pytest.raises(RuntimeError, match='qa connect jira'):
 		jira.jira_server(Config())
 	cfg = Config(mcp_servers=[MCPServer(name='jira', command='npx')])
 	assert jira.jira_server(cfg).name == 'jira'

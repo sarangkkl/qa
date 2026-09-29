@@ -5,6 +5,7 @@
   "windows": ["main", "ws-*"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-theme",
     "dialog:allow-open",
     {
       "identifier": "shell:allow-spawn",

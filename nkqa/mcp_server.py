@@ -23,6 +23,7 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO, Any
 
 import anyio
@@ -37,6 +38,7 @@ from nkqa import workspace as workspace_mod
 from nkqa.appmap import AppmapUpdate, FileUpdate
 from nkqa.config import Config
 from nkqa.dialogs import DialogChannel
+from nkqa.execution import screencast
 from nkqa.execution.driver import Driver, read_step_log
 from nkqa.execution.evidence import recorded_runs, recording_file, step_count
 from nkqa.execution.report import ScenarioResult, StepVerdict, last_verdict, write_results
@@ -45,29 +47,12 @@ from nkqa.execution.stream import redact
 from nkqa.hitl import HumanInTheLoop
 from nkqa.jira import issue_key, read_issue
 from nkqa.planner import PLANNER_SYSTEM, DraftScenario, gather_context, write_drafts
-from nkqa.prompts import QA_RULES_MCP
+from nkqa.prompts import INSTRUCTIONS, QA_RULES_MCP
 from nkqa.reflector import run_facts
 from nkqa.scenarios import Scenario
 from nkqa.ui import Ask, Channel, Event
 from nkqa.vault import Vault
 from nkqa.workspace import Workspace
-
-INSTRUCTIONS = """\
-nkqa is a QA workspace for a web app. You are the QA engineer; nkqa gives you the notebook
-(appmap), the scenario files, a real recorded browser and the evidence. It never calls a model.
-Workflow: workspace_status -> read_appmap -> write_scenario per draft -> the human reviews ->
-approve_scenario only when the human says so -> start_run -> loop { browser_state -> one action }
--> finish_run -> update_appmap if the run taught something -> tell the human.
-Hard rules:
-1. Ask before anything irreversible: request_permission before deleting, paying, sending or
-   changing settings. Denied means skip that step and report it, never retry.
-2. Never invent credentials: ask_credential(name), then type the literal <secret>name</secret>.
-   You never see values; do not try to.
-3. A broken feature is a finding, not an obstacle: record expected vs actual, keep testing.
-Approval, permissions and credentials are the human's keystrokes in a native dialog on their
-screen. Only scenarios reported as `ok` can run. When you need information, ask the human in
-chat - there is no tool for that.
-"""
 
 REFUSALS = {
 	'draft': 'is not approved yet. Ask the human to review it; call approve_scenario("{id}") when they say so.',
@@ -107,8 +92,11 @@ class CapturingChannel(Channel):
 class Session:
 	"""Process-wide state: one workspace, one HITL, at most one open browser."""
 
-	def __init__(self, dialogs: Channel | None = None):
+	def __init__(self, dialogs: Channel | None = None, live: Channel | None = None):
 		self.dialogs: Channel = dialogs or DialogChannel()
+		# A window that can show the browser. The desktop sidecar sets it; stdio has none.
+		self.live = live
+		self._cast: asyncio.Task[None] | None = None
 		self.ws: Workspace | None = None
 		self.config = Config()
 		self.hitl: HumanInTheLoop | None = None
@@ -148,8 +136,22 @@ class Session:
 			raise ValueError('Element indices are stale: call browser_state first, then use an index from it.')
 		return driver
 
+	def begin(self, driver: Driver, scenario: Scenario | None, run_dir: Path) -> None:
+		self.driver, self.scenario, self.run_dir = driver, scenario, run_dir
+		if self.live is not None and driver.session is not None:
+			self._cast = asyncio.create_task(self._screencast(driver.session, self.live))
+
+	async def _screencast(self, browser: Any, live: Channel) -> None:
+		async with screencast.stream(SimpleNamespace(browser_session=browser), live):
+			await asyncio.Event().wait()  # until end_run cancels it
+
 	async def end_run(self, aborted: bool = False) -> Path:
 		driver = self.require_run()
+		if self._cast is not None:
+			self._cast.cancel()
+			with contextlib.suppress(asyncio.CancelledError):
+				await self._cast
+			self._cast = None
 		await driver.close(aborted=aborted)
 		self.driver = None
 		run_dir, self.run_dir = driver.run_dir, None
@@ -192,7 +194,14 @@ def build_server(session: Session) -> FastMCP:
 			f'{k}: {states.count(k)}' for k in ('ok', 'draft', 'stale', 'deprecated') if states.count(k)
 		)
 		active = f'Active run: {session.run_dir.name}' if session.run_dir else 'No run active.'
-		jira = 'configured' if session.config.mcp_server('jira') else 'not configured'
+		# The Jira tools always register and fail at call time, so this status line is where an
+		# agent learns Jira is possible at all - it has to carry the setup instructions.
+		jira = (
+			'configured'
+			if session.config.mcp_server('jira')
+			else 'not configured. To enable reading tickets and filing bugs, the human runs '
+			'`qa connect jira --project KEY` then `qa auth jira` in a terminal, and restarts this client.'
+		)
 		return (
 			f'Workspace: {ws.root}\nApp: {cfg.app_name or "(unnamed)"} — {cfg.base_url or "(no base URL)"}\n'
 			f'Scenarios: {len(states)} ({by_state or "none"})\nRuns recorded: {len(recorded_runs(ws.runs_dir))}\n'
@@ -345,7 +354,7 @@ def build_server(session: Session) -> FastMCP:
 		run_dir = ws.scenario_run_dir(s.id)
 		driver = Driver(run_dir, hitl.secrets, session.config.headless, s.id)
 		await driver.start()
-		session.driver, session.scenario, session.run_dir = driver, s, run_dir
+		session.begin(driver, s, run_dir)
 		task = build_task(s, session.config.base_url, appmap.context_for_run(ws))
 		return (
 			f'Run {run_dir.name} started; the browser is open and recording.\n\n{task}\n\n'
@@ -368,7 +377,7 @@ def build_server(session: Session) -> FastMCP:
 		hitl.scenario_id = ''
 		driver = Driver(run_dir, hitl.secrets, session.config.headless)
 		await driver.start()
-		session.driver, session.scenario, session.run_dir = driver, None, run_dir
+		session.begin(driver, None, run_dir)
 		opened = await driver.act('navigate', {'url': url}) if url else 'No URL given: navigate first.'
 		return _clean(
 			session,

@@ -119,7 +119,7 @@ def main() -> None:
 	sock, port = bind_port(args.port)
 	print(json.dumps({'ready': True, 'port': port, 'token': auth.new_token(), 'workspace': str(ws.root)}), flush=True)
 
-	uvicorn.run(create_app(ws), fd=sock.fileno(), log_level=args.log_level, access_log=False)
+	uvicorn.run(create_app(ws, port), fd=sock.fileno(), log_level=args.log_level, access_log=False)
 
 
 if __name__ == '__main__':

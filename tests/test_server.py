@@ -39,6 +39,26 @@ def ws(tmp_path: Path) -> Workspace:
 	return workspace
 
 
+@pytest.fixture(autouse=True)
+def no_real_claude(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+	"""Never spawn the machine's real `claude`, never read the real ~/.claude."""
+	from nkqa.server import claude
+
+	async def fake_status(recheck: bool = False) -> dict[str, Any]:
+		return {
+			'path': '/x/claude',
+			'version': '9.9.9',
+			'logged_in': True,
+			'auth_method': 'claude.ai',
+			'plan': 'max',
+			'ready': True,
+		}
+
+	monkeypatch.setattr(claude, 'status', fake_status)
+	monkeypatch.setattr(claude, 'find_claude', lambda: '')
+	monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+
+
 @pytest.fixture
 def client(ws: Workspace) -> Iterator[TestClient]:
 	auth.set_token(TOKEN)
@@ -76,7 +96,7 @@ def test_websocket_rejects_a_bad_token(client: TestClient) -> None:
 
 def test_health_and_workspace(client: TestClient, ws: Workspace) -> None:
 	health = get(client, '/health').json()
-	assert health['workspace'] == str(ws.root) and 'chat' in health['roles'] and health['busy'] is False
+	assert health['workspace'] == str(ws.root) and health['claude']['ready'] is True and health['busy'] is False
 
 	state = get(client, '/workspace').json()
 	assert state['scenarios'][0]['id'] == 'auth/login'
@@ -638,39 +658,68 @@ def test_evidence_saving_cancel_still_reports_cancelled() -> None:
 # --- chat over the socket ----------------------------------------------------
 
 
-def test_say_creates_a_chat_and_records_it(client: TestClient, ws: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
-	"""`say` is what the desktop Chat view sends; commands alone cannot carry plain English."""
-	from nkqa import chats as chats_mod
-	from nkqa.shell import agent
+FAKE_CLAUDE = """#!/bin/sh
+if [ "$2" != "--output-format" ]; then echo '"Login flow planning"'; exit 0; fi
+printf '%s\\n' "$@" > "{args}"
+cat > "{prompt}"
+echo '{{"type":"system","subtype":"init"}}'
+echo 'not json'
+echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"On it."}}]}}}}'
+"""
 
-	class StubLLM:
-		async def ainvoke(self, messages: Any, output_format: Any = None) -> Any:
-			class R:
-				completion = agent.ChatDecision(reply='Listing your scenarios.', command='scenarios')
 
-			return R()
+def test_say_is_a_claude_turn(
+	client: TestClient, ws: Workspace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+	"""`say` spawns the user's own `claude` against this sidecar's /mcp, and streams it back."""
+	from nkqa.server import claude
 
-	def fake_resolve(cfg: object, role: str, override: str | None = None) -> object:
-		return StubLLM()
+	script = tmp_path / 'claude'
+	args_file, prompt_file = tmp_path / 'args.txt', tmp_path / 'prompt.txt'
+	script.write_text(FAKE_CLAUDE.format(args=args_file, prompt=prompt_file))
+	script.chmod(0o755)
+	monkeypatch.setattr(claude, 'find_claude', lambda: str(script))
 
-	monkeypatch.setattr(agent, 'resolve_llm', fake_resolve)
+	def say(text: str, chat: str = '') -> list[dict[str, Any]]:
+		with client.websocket_connect(f'/session?token={TOKEN}') as socket:
+			socket.send_json({'type': 'say', 'id': 's1', 'text': text, **({'chat': chat} if chat else {})})
+			frames: list[dict[str, Any]] = []
+			while True:
+				frames.append(socket.receive_json())
+				if frames[-1]['type'] == 'result':
+					break
+			if not chat:  # a new chat is named by Claude once its first reply is in
+				frames.append(socket.receive_json())
+			return frames
 
-	chat_id = ''
-	with client.websocket_connect(f'/session?token={TOKEN}') as socket:
-		socket.send_json({'type': 'say', 'id': 's1', 'text': 'what scenarios do I have?'})
-		while True:
-			frame = socket.receive_json()
-			if frame['type'] == 'chat':
-				chat_id = frame['id']  # the server tells the client which chat it opened
-			if frame['type'] == 'result':
-				assert frame['job'] == 's1'
-				break
+	frames = say('-plan the login flow')
+	assert frames[-1]['type'] == 'chat' and frames[-1]['title'] == 'Login flow planning'
+	frames = frames[:-1]
+	chat_id = next(f['id'] for f in frames if f['type'] == 'chat')
+	assert claude.SESSION_ID.match(chat_id)
+	said = [f['msg'] for f in frames if f['type'] == 'claude']
+	assert said[-1]['message']['content'][0]['text'] == 'On it.' and len(said) == 2  # the junk line is dropped
+	assert frames[-1]['code'] == 0
+	assert prompt_file.read_text() == '-plan the login flow'  # stdin, so a leading '-' is not a flag
+	args = args_file.read_text().splitlines()
+	assert args[args.index('--session-id') + 1] == chat_id and '--strict-mcp-config' in args
+	assert '/mcp' in args[args.index('--mcp-config') + 1] and TOKEN in args[args.index('--mcp-config') + 1]
+	assert claude.read_titles(ws.chat_titles_file) == {chat_id: 'Login flow planning'}
 
-	assert chat_id
-	stored = chats_mod.load(ws, chat_id)
-	assert stored is not None
-	assert stored.turns[0].text == 'what scenarios do I have?'
-	assert any(t.command == 'scenarios' for t in stored.turns)
+	# The session file exists once Claude has written to it: the next message resumes it.
+	folder = claude.project_dir(ws.root)
+	folder.mkdir(parents=True)
+	(folder / f'{chat_id}.jsonl').write_text('')
+	frames = say('and the logout flow', chat_id)
+	assert not any(f['type'] == 'chat' for f in frames)
+	args = args_file.read_text().splitlines()
+	assert args[args.index('--resume') + 1] == chat_id
+
+
+def test_say_without_claude_installed_says_so(client: TestClient) -> None:
+	frames = run_frames(client, [{'type': 'say', 'id': 's1', 'text': 'hi'}])
+	assert frames[-1]['code'] == 2
+	assert any('not installed' in f.get('text', '') for f in frames)
 
 
 def test_empty_say_is_a_usage_error(client: TestClient) -> None:
@@ -678,18 +727,134 @@ def test_empty_say_is_a_usage_error(client: TestClient) -> None:
 	assert frames[-1]['code'] == 2 and 'empty message' in frames[-1]['error']
 
 
-def test_chat_routes(client: TestClient, ws: Workspace) -> None:
-	from nkqa import chats as chats_mod
-	from nkqa.chats import Turn
+def test_chat_routes_read_claude_codes_own_sessions(client: TestClient, ws: Workspace) -> None:
+	import json
 
-	chat = chats_mod.new_chat(ws)
-	chat.add(Turn(role='user', text='hello'))
-	chats_mod.save(ws, chat)
+	from nkqa.server import claude
 
-	assert get(client, '/chats').json()['chats'][0]['id'] == chat.id
-	body = get(client, f'/chats/{chat.id}').json()
-	assert body['turns'][0]['text'] == 'hello'
-	assert get(client, '/chats/nope').status_code == 404
+	sid = '0b7e6c1a-1111-4222-8333-944455556666'
+	folder = claude.project_dir(ws.root)
+	folder.mkdir(parents=True)
+	lines = [
+		{'type': 'user', 'isMeta': True, 'message': {'content': 'caveat'}},
+		{'type': 'user', 'message': {'content': '<command-name>/model</command-name>'}},
+		{'type': 'user', 'message': {'content': 'plan the login flow'}},
+		{'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'Drafting.'}]}},
+		{'type': 'ai-title', 'aiTitle': 'Login flow scenarios', 'sessionId': sid},
+		{'type': 'attachment', 'attachment': {}},
+	]
+	(folder / f'{sid}.jsonl').write_text('\n'.join(json.dumps(x) for x in lines) + '\nbroken{\n')
+	(folder / 'not-a-session.jsonl').write_text('')
+
+	chats = get(client, '/chats').json()['chats']
+	assert [(c['id'], c['title'], c['turns']) for c in chats] == [(sid, 'Login flow scenarios', 1)]
+	body = get(client, f'/chats/{sid}').json()
+	assert body['title'] == 'Login flow scenarios'
+	assert [m['type'] for m in body['messages']] == ['user', 'assistant']
+	assert get(client, '/chats/0b7e6c1a-1111-4222-8333-000000000000').status_code == 404
+	assert get(client, '/chats/..%2F..%2Fetc').status_code == 404
+
+
+def test_a_custom_title_beats_claudes_and_the_first_message_is_the_fallback(tmp_path: Path) -> None:
+	import json
+
+	from nkqa.server import claude
+
+	folder = claude.project_dir(tmp_path)
+	folder.mkdir(parents=True)
+	a, b = '0b7e6c1a-1111-4222-8333-94445555aaaa', '0b7e6c1a-1111-4222-8333-94445555bbbb'
+	(folder / f'{a}.jsonl').write_text(
+		'\n'.join(
+			json.dumps(x)
+			for x in (
+				{'type': 'custom-title', 'customTitle': 'mine'},
+				{'type': 'user', 'message': {'content': [{'type': 'text', 'text': 'hello'}]}},
+				{'type': 'ai-title', 'aiTitle': 'theirs'},
+			)
+		)
+	)
+	(folder / f'{b}.jsonl').write_text(json.dumps({'type': 'user', 'message': {'content': 'x' * 100}}))
+	titles = {c['id']: c['title'] for c in claude.list_sessions(tmp_path)}
+	assert titles == {a: 'mine', b: 'x' * 60}
+
+
+def test_project_dir_matches_claude_codes_naming() -> None:
+	from nkqa.server import claude
+
+	assert claude.project_dir(Path('/Users/g/dreams/nkqa/browser-use')).name == '-Users-g-dreams-nkqa-browser-use'
+	assert claude.project_dir(Path('/tmp/my.app_x')).name == '-tmp-my-app-x'
+
+
+def test_claude_never_inherits_an_api_key_from_a_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""Claude Code prefers ANTHROPIC_API_KEY to the user's login: passing nkqa's on would bill it."""
+	from nkqa.server.claude import child_env
+
+	monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-from-a-dotenv')
+	monkeypatch.setenv('KEEP_ME', '1')
+	env = child_env('/opt/somewhere/bin/claude')
+	assert 'ANTHROPIC_API_KEY' not in env and env['KEEP_ME'] == '1'
+	assert env['PATH'].split(os.pathsep)[0] == '/opt/somewhere/bin'
+
+
+def test_only_a_paying_signed_in_user_is_ready() -> None:
+	from nkqa.server.claude import ready
+
+	assert ready(True, 'claude.ai', 'firstParty', 'max') and ready(True, 'claude.ai', 'firstParty', 'pro')
+	assert not ready(True, 'claude.ai', 'firstParty', '') and not ready(True, 'claude.ai', 'firstParty', 'free')
+	assert not ready(False, '', 'firstParty', '')
+	assert ready(True, 'api_key', 'firstParty', '')  # console billing
+	assert ready(False, '', 'bedrock', '')  # the cloud provider's own credentials
+
+
+def test_open_serves_two_fixed_pages_only(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	import webbrowser
+
+	opened: list[str] = []
+
+	def fake_open(url: str) -> bool:
+		opened.append(url)
+		return True
+
+	monkeypatch.setattr(webbrowser, 'open', fake_open)
+	headers = {'Authorization': f'Bearer {TOKEN}'}
+	assert client.post('/open/upgrade', headers=headers).json() == {'ok': True}
+	assert client.post('/open/https:%2F%2Fevil.test', headers=headers).status_code == 404
+	assert opened == ['https://claude.ai/upgrade']
+
+
+def test_mcp_needs_the_token(client: TestClient) -> None:
+	body = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}}
+	assert client.post('/mcp', json=body).status_code == 401
+	accept = {'Accept': 'application/json, text/event-stream'}
+	ok = client.post('/mcp', json=body, headers={'Authorization': f'Bearer {TOKEN}', **accept})
+	assert ok.status_code != 401
+	evil = {'Authorization': f'Bearer {TOKEN}', 'Origin': 'https://evil.test', **accept}
+	assert client.post('/mcp', json=body, headers=evil).status_code == 401
+
+
+def test_the_relay_denies_when_no_window_is_open() -> None:
+	from nkqa.server.channel import Relay
+	from nkqa.ui import Ask
+
+	assert asyncio.run(Relay().ask(Ask(kind='confirm', prompt='delete?'))) == ''
+
+
+def test_closing_the_window_forgets_the_session(ws: Workspace) -> None:
+	"""The window and Claude share one HITL, so closing the window must end what it granted."""
+	auth.set_token(TOKEN)
+	app = create_app(ws)
+	hitl = app.state.mcp_session.require_hitl()
+	with TestClient(app) as c, c.websocket_connect(f'/session?token={TOKEN}') as socket:
+		assert app.state.relay.target is not None
+		hitl.secrets['password'] = 'hunter2'
+		hitl.autonomy = 'allow'
+		socket.send_json({'type': 'nonsense'})
+		socket.receive_json()
+		socket.close()
+		time.sleep(0.2)
+		assert hitl.secrets == {} and hitl.autonomy == 'ask'
+		assert app.state.relay.target is None
+	auth.set_token('')
 
 
 def test_frames_are_their_own_lean_message_type() -> None:

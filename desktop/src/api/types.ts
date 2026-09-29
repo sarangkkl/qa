@@ -12,18 +12,21 @@ export interface Connection {
 
 // --- HTTP -------------------------------------------------------------------
 
-export interface RoleHealth {
-	model: string
-	provider: string
-	missing_keys: string[]
+/** The user's own Claude Code, which does all the thinking. `ready` = signed in and paying. */
+export interface ClaudeStatus {
+	path: string
+	version: string
+	logged_in: boolean
+	auth_method: string
+	plan: string
+	ready: boolean
 }
 
 export interface Health {
 	nkqa: string
 	browser_use: string
 	workspace: string
-	models_ok: boolean
-	roles: Record<string, RoleHealth>
+	claude: ClaudeStatus
 	busy: boolean
 }
 
@@ -129,29 +132,54 @@ export interface RunDetail {
 	conversation: string[]
 }
 
+/** A Claude Code session in this workspace's folder, whoever started it. */
 export interface ChatSummary {
 	id: string
 	title: string
-	created: string
 	updated: string
 	turns: number
-}
-
-export interface ChatTurn {
-	role: 'user' | 'assistant' | 'event'
-	text: string
-	command: string
-	args: Record<string, string>
-	exit: number | null
-	at: string
 }
 
 export interface ChatDetail {
 	id: string
 	title: string
-	created: string
-	updated: string
-	turns: ChatTurn[]
+	messages: ClaudeMessage[]
+}
+
+// --- Claude Code's stream-json, which is also its session-file shape ---------------
+
+export interface TextBlock {
+	type: 'text'
+	text: string
+}
+
+export interface ImageBlock {
+	type: 'image'
+	source: { type: string; media_type: string; data: string }
+}
+
+export interface ToolUseBlock {
+	type: 'tool_use'
+	id: string
+	name: string
+	input: Record<string, unknown>
+}
+
+export interface ToolResultBlock {
+	type: 'tool_result'
+	tool_use_id: string
+	content: string | (TextBlock | ImageBlock)[]
+	is_error?: boolean
+}
+
+export type Block = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | { type: 'thinking' | 'redacted_thinking' }
+
+export interface ClaudeMessage {
+	type: 'user' | 'assistant' | 'system' | 'result'
+	subtype?: string
+	message?: { content: string | Block[] }
+	is_error?: boolean
+	result?: string
 }
 
 // --- WebSocket --------------------------------------------------------------
@@ -196,6 +224,12 @@ export interface CancelledFrame {
 	ok: boolean
 }
 
+export interface ClaudeFrame {
+	type: 'claude'
+	job: string
+	msg: ClaudeMessage
+}
+
 export interface ChatFrame {
 	type: 'chat'
 	id: string
@@ -223,5 +257,6 @@ export type ServerFrame =
 	| ResultFrame
 	| CancelledFrame
 	| ChatFrame
+	| ClaudeFrame
 	| ImageFrame
 	| ErrorFrame

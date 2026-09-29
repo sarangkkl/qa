@@ -62,3 +62,20 @@ class SocketChannel(Channel):
 			if not future.done():
 				future.set_result('')
 		self.pending.clear()
+
+
+class Relay(Channel):
+	"""The MCP tools outlive any one socket, so they ask through whichever window is open now.
+
+	No window means no human to ask: '' - a deny, like everywhere else.
+	"""
+
+	def __init__(self) -> None:
+		self.target: SocketChannel | None = None
+
+	async def emit(self, event: Event) -> None:
+		if self.target is not None:
+			await self.target.emit(event)
+
+	async def ask(self, request: Ask) -> str:
+		return await self.target.ask(request) if self.target is not None else ''

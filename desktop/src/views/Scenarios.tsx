@@ -3,12 +3,14 @@
  * Approving is a human keystroke and it stays one: the button opens the real `approve`
  * command, which asks over the socket with the whole scenario in the ask body, and the
  * modal makes you read it and confirm. No one-click chip. That gate is the product.
+ *
+ * Running is Claude's job: Run hands the scenario to the chat, where the run can be watched.
  */
 
+import { Play, ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api/client'
 import type { Connection, RunDetail, ScenarioDetail, ScenarioSummary } from '../api/types'
-import type { Session } from '../api/socket'
 import { Evidence } from '../components/Evidence'
 import { Markdown, stripFrontmatter } from '../components/Markdown'
 import { Report } from '../components/Report'
@@ -22,21 +24,23 @@ const STATE_LABEL: Record<string, string> = {
 
 export function Scenarios({
 	connection,
-	session,
 	scenarios,
 	busy,
-	hasJira,
-	onChanged,
+	canRun,
+	focus,
+	onApprove,
+	onRun,
 }: {
 	connection: Connection
-	session: Session
 	scenarios: ScenarioSummary[]
 	busy: boolean
-	hasJira: boolean
-	onChanged: () => void
+	canRun: boolean
+	/** A scenario a chat card asked to open. */
+	focus: string
+	onApprove: (id: string) => void
+	onRun: (id: string) => void
 }) {
-	const [selected, setSelected] = useState<string>('')
-	const [ticket, setTicket] = useState('')
+	const [selected, setSelected] = useState<string>(focus)
 	const [detail, setDetail] = useState<ScenarioDetail | null>(null)
 	const [error, setError] = useState('')
 	const [view, setView] = useState<'spec' | 'result'>('spec')
@@ -57,6 +61,10 @@ export function Scenarios({
 			live = false
 		}
 	}, [connection, selected, scenarios])
+
+	useEffect(() => {
+		if (focus) setSelected(focus)
+	}, [focus])
 
 	// Picking a different scenario always lands on its spec.
 	useEffect(() => setView('spec'), [selected])
@@ -99,33 +107,8 @@ export function Scenarios({
 			<div className="list">
 				<div className="list-head">
 					<h2>Scenarios</h2>
-					<button disabled={busy} onClick={() => session.command('suite', {})}>
-						Run suite
-					</button>
 				</div>
-				{hasJira && (
-					<form
-						className="ticket-plan"
-						onSubmit={(e) => {
-							e.preventDefault()
-							const key = ticket.trim().toUpperCase()
-							if (!key) return
-							session.command('plan', { ticket: key })
-							setTicket('')
-						}}
-					>
-						<input
-							value={ticket}
-							onChange={(e) => setTicket(e.target.value)}
-							placeholder="Plan from a ticket, e.g. PROJ-123"
-							spellCheck={false}
-						/>
-						<button type="submit" disabled={busy || !ticket.trim()}>
-							Plan
-						</button>
-					</form>
-				)}
-				{scenarios.length === 0 && <p className="empty">No scenarios yet. Ask for some in Chat.</p>}
+				{scenarios.length === 0 && <p className="empty">No scenarios yet. Ask Claude for some in Chat.</p>}
 				{scenarios.map((s) => (
 					<button
 						key={s.id}
@@ -157,20 +140,14 @@ export function Scenarios({
 							<div className="detail-actions">
 								<button
 									className="primary"
-									disabled={busy || !runnable}
-									title={runnable ? '' : 'only an approved scenario can run'}
-									onClick={() => session.command('run', { id: detail.id })}
+									disabled={busy || !runnable || !canRun}
+									title={runnable ? 'Claude runs it in a real browser' : 'only an approved scenario can run'}
+									onClick={() => onRun(detail.id)}
 								>
-									Run
+									<Play size={14} /> Run
 								</button>
-								<button
-									disabled={busy || detail.state === 'ok'}
-									onClick={() => {
-										session.command('approve', { id: detail.id })
-										setTimeout(onChanged, 400)
-									}}
-								>
-									Review &amp; approve…
+								<button disabled={busy || detail.state === 'ok'} onClick={() => onApprove(detail.id)}>
+									<ShieldCheck size={14} /> Review &amp; approve…
 								</button>
 							</div>
 						</div>

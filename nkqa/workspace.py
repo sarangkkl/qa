@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from nkqa import prompts
 from nkqa.config import render_template
 
 CONFIG_FILE = 'config.yaml'
@@ -38,6 +39,20 @@ runs/*/videos/
 .nkqa/
 """
 
+# How a coding agent opening this folder finds nkqa. Always the portable `uvx` line, never this
+# interpreter: the file gets committed and cloned, and a plugin-launched nkqa lives in a uv
+# environment that can be collected out from under the path.
+MCP_JSON = """{
+  "mcpServers": {
+    "nkqa": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/sarangkkl/nkqa", "qa", "mcp"]
+    }
+  }
+}
+"""
+
 
 def slugify(text: str) -> str:
 	"""Turn free text into a meaningful folder name: 'Login flow!' -> 'login-flow'."""
@@ -56,6 +71,7 @@ class Workspace:
 		self.chats_dir = self.root / 'chats'  # committed: the reasoning behind a scenario is reviewable
 		self.permissions_file = self.root / 'qa_permissions.json'
 		self.local_dir = self.root / '.nkqa'  # gitignored: machine-local, never shared
+		self.chat_titles_file = self.local_dir / 'chat-titles.json'  # desktop chats Claude named
 
 	def run_dir(self, name: str) -> Path:
 		return self.runs_dir / slugify(name)
@@ -125,6 +141,14 @@ def recent_workspaces(recents: Path | None = None) -> list[Workspace]:
 	return found
 
 
+def write_new(path: Path, text: str) -> None:
+	"""Write only when absent. `create` runs in folders that are already someone's app repo."""
+	if path.exists():
+		return
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding='utf-8')
+
+
 def create(root: Path, app_name: str = '', base_url: str = '') -> Workspace:
 	"""Create the workspace layout in root. Idempotent; never overwrites existing files."""
 	ws = Workspace(root)
@@ -148,6 +172,12 @@ def create(root: Path, app_name: str = '', base_url: str = '') -> Workspace:
 	gitignore = ws.root / '.gitignore'
 	if not gitignore.exists():
 		gitignore.write_text(GITIGNORE)
+	# So any agent opening this folder knows the job and finds the tools. Never overwritten:
+	# this is usually the app's own repo, which may already have a CLAUDE.md or an .mcp.json.
+	write_new(ws.root / 'AGENTS.md', prompts.agents_md(app_name, base_url))
+	write_new(ws.root / 'CLAUDE.md', prompts.CLAUDE_POINTER)
+	write_new(ws.root / '.mcp.json', MCP_JSON)
+	write_new(ws.root / '.cursor' / 'mcp.json', MCP_JSON)
 	return ws
 
 

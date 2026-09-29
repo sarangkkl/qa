@@ -1,216 +1,211 @@
-/** Plain English in, work out.
+/** Talking to Claude Code, which does the thinking on the user's own login.
  *
- * Two ways in, both ending at the same registry: prose goes to `say` and is routed by the
- * agent; a line starting with `/` is sent verbatim and parsed server-side by the terminal's
- * own parser. The palette is built from the commands `GET /workspace` served, never from a
- * hardcoded list, so a new command shows up here the day it is added.
+ * The sessions listed are Claude Code's own for this folder, titles included, so a chat started
+ * in the terminal shows up here and one started here resumes there. A turn in flight is drawn
+ * from the live stream; once it is saved in the session file, the file takes over - one source
+ * at a time, so nothing is ever on screen twice.
  */
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { StopButton } from '../components/StopButton'
+import { MessageSquare, SquarePen } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as api from '../api/client'
-import type { Session, Job } from '../api/socket'
-import type { ChatDetail, ChatSummary, CommandInfo, Connection } from '../api/types'
+import type { Job } from '../api/socket'
+import type { ChatDetail, ChatSummary, Connection, WorkspaceState } from '../api/types'
+import { Composer } from '../components/chat/Composer'
+import { toItems, Transcript, type Item } from '../components/chat/Transcript'
 
-/** "/run <id> [--model]" - the same shape /help prints in the terminal. */
-function usage(cmd: CommandInfo): string {
-	const parts = cmd.params.map((p) => (p.required ? `<${p.name}>` : p.flag ? `[--${p.name}]` : `[${p.name}]`))
-	return `/${cmd.name}${parts.length ? ' ' + parts.join(' ') : ''}`
+export interface Turn {
+	chat: string
+	text: string
 }
+
+function ago(iso: string): string {
+	const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+	if (!Number.isFinite(minutes)) return ''
+	if (minutes < 1) return 'just now'
+	if (minutes < 60) return `${minutes}m ago`
+	if (minutes < 60 * 24) return `${Math.round(minutes / 60)}h ago`
+	return `${Math.round(minutes / 60 / 24)}d ago`
+}
+
+/** A turn is in the session file once it finished cleanly or was stopped; a failed one may
+ * never have reached it, so it stays drawn from the stream with its error. */
+const saved = (job: Job) => job.done && (job.code === 0 || job.cancelled)
 
 export function Chat({
 	connection,
-	session,
+	state,
 	jobs,
 	chatId,
-	commands,
-	mine,
-	stopping,
-	onStop,
-	onForce,
+	turns,
+	titleTick,
+	busy,
+	running,
+	canRun,
 	onChat,
+	onSay,
+	onStop,
+	onApprove,
+	onOpenScenario,
 }: {
 	connection: Connection
-	session: Session
+	state: WorkspaceState
 	jobs: Job[]
 	chatId: string
-	commands: CommandInfo[]
-	mine: RefObject<Set<string>>
-	stopping: string
-	onStop: (id: string) => void
-	onForce: () => void
+	turns: RefObject<Map<string, Turn>>
+	titleTick: number
+	busy: boolean
+	running: Job | null
+	canRun: boolean
 	onChat: (id: string) => void
+	onSay: (text: string) => void
+	onStop: (id: string) => void
+	onApprove: (id: string) => void
+	onOpenScenario: (id: string) => void
 }) {
-	const [text, setText] = useState('')
-	const [history, setHistory] = useState<ChatDetail | null>(null)
 	const [list, setList] = useState<ChatSummary[]>([])
-	const [help, setHelp] = useState<string[]>([])
-	const bottom = useRef<HTMLDivElement>(null)
+	const [history, setHistory] = useState<ChatDetail | null>(null)
+	const [absorbed, setAbsorbed] = useState<Set<string>>(new Set())
+	const log = useRef<HTMLDivElement>(null)
+	const stick = useRef(true)
 
-	useEffect(() => {
-		api.chats(connection).then((r) => setList(r.chats)).catch(() => setList([]))
-	}, [connection, jobs.length])
-
-	// Refetch when a job FINISHES, not only when one starts. Keying on `jobs.length` left the
-	// transcript a whole message behind, so a reply only turned up in it once you sent the next
-	// thing - and then sat alongside its own live bubble.
 	const finished = jobs.filter((j) => j.done).length
 
 	useEffect(() => {
+		api
+			.chats(connection)
+			.then((r) => setList(r.chats))
+			.catch(() => setList([]))
+	}, [connection, finished, titleTick, chatId])
+
+	useEffect(() => {
 		if (!chatId) return setHistory(null)
-		api.chat(connection, chatId).then(setHistory).catch(() => setHistory(null))
-	}, [connection, chatId, jobs.length, finished])
-
-	useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [jobs, history])
-
-	// `/help` and `/exit` are terminal meta commands the server refuses; answer them here
-	// rather than sending a frame that can only come back as a usage error.
-	const runnable = useMemo(() => commands.filter((c) => !c.shell_only), [commands])
-	const suggestions = useMemo(() => {
-		if (!text.startsWith('/') || text.includes(' ')) return []
-		const typed = text.slice(1).toLowerCase()
-		return runnable.filter((c) => c.name.startsWith(typed))
-	}, [text, runnable])
-
-	const send = () => {
-		const message = text.trim()
-		if (!message) return
-		setHelp([])
-		if (message === '/help' || message === '/?') {
-			setHelp(runnable.map((c) => `${usage(c).padEnd(34)} ${c.help}`))
-			setText('')
-			return
+		let live = true
+		const done = jobs.filter(saved).map((j) => j.id)
+		api
+			.chat(connection, chatId)
+			.then((h) => {
+				if (!live) return
+				setHistory(h)
+				setAbsorbed(new Set(done))
+			})
+			.catch(() => live && setHistory(null))
+		return () => {
+			live = false
 		}
-		if (message === '/exit') {
-			setHelp(['Close the window to end the session.'])
-			setText('')
-			return
-		}
-		if (message.startsWith('/')) mine.current.add(session.commandLine(message, chatId))
-		else mine.current.add(session.say(message, chatId || undefined))
-		setText('')
-	}
+		// `jobs` is read for its finished ids at fetch time; refetching on every streamed line is not wanted.
+	}, [connection, chatId, finished])
 
-	// The agent's reply is written to two places - streamed as a job event AND saved as a turn -
-	// so once the transcript catches up it is on screen twice, which reads as the agent
-	// repeating itself after every message. Drop the bubble only when the transcript demonstrably
-	// carries everything it said.
-	//
-	// Line by line rather than "it is a finished say", because a `say` that ran a command also
-	// streamed that command's output, and the transcript keeps only the command name and its
-	// exit code. Dropping those bubbles would silently swallow a /correct diff. If any line is
-	// missing from the transcript, the bubble stays.
-	const spoken = useMemo(() => {
-		const said = new Set((history?.turns ?? []).map((t) => t.text.trim()).filter(Boolean))
-		return (job: Job) => job.done && job.events.every((e) => !e.text.trim() || said.has(e.text.trim()))
-	}, [history])
-	const live = jobs.filter((j) => mine.current.has(j.id) && !spoken(j))
+	const liveJobs = jobs.filter((j) => turns.current.get(j.id)?.chat === chatId && !(saved(j) && absorbed.has(j.id)))
+
+	const items = useMemo(() => {
+		const out: Item[] = history?.id === chatId ? toItems(history.messages) : []
+		for (const job of liveJobs) {
+			out.push({ kind: 'user', text: turns.current.get(job.id)?.text ?? '' })
+			out.push(...toItems(job.messages))
+			const said = job.events.map((e) => e.text).join('\n').trim()
+			if (job.done && !job.cancelled && job.code !== 0) out.push({ kind: 'error', text: job.error || said || 'That turn failed.' })
+		}
+		return out
+	}, [history, chatId, jobs, absorbed])
+
+	const mine = running && turns.current.get(running.id)?.chat === chatId ? running : null
+	const thinking = mine !== null
+
+	// Follow the conversation only while you are at the bottom of it: scrolling up to read
+	// something must not be yanked away by the next streamed line.
+	useLayoutEffect(() => {
+		const el = log.current
+		if (el && stick.current) el.scrollTop = el.scrollHeight
+	}, [items, thinking])
+
+	useEffect(() => {
+		stick.current = true
+	}, [chatId])
+
+	const title = list.find((c) => c.id === chatId)?.title || history?.title || (chatId ? 'Untitled chat' : 'New chat')
+	const empty = items.length === 0 && !thinking
+	const suggestions = [
+		'What do you know about this app so far?',
+		'Plan scenarios for the login flow',
+		state.base_url ? `Explore ${state.base_url} and learn the main pages` : 'Explore the app and learn the main pages',
+	]
 
 	return (
 		<div className="split">
 			<div className="list">
 				<div className="list-head">
 					<h2>Chats</h2>
-					<button onClick={() => onChat('')}>New</button>
+					<button className="icon-btn" title="New chat (⌘N)" onClick={() => onChat('')}>
+						<SquarePen size={16} />
+					</button>
 				</div>
 				{list.map((c) => (
 					<button key={c.id} className={`row ${chatId === c.id ? 'row-selected' : ''}`} onClick={() => onChat(c.id)}>
-						<span className="row-title">{c.title || '(untitled)'}</span>
-						<span className="row-sub">
-							{c.turns} turns · {c.updated.replace('T', ' ')}
-						</span>
+						<span className="row-title row-clip">{c.title || 'Untitled chat'}</span>
+						<span className="row-sub">{ago(c.updated)}</span>
 					</button>
 				))}
 				{list.length === 0 && <p className="empty">No conversations yet.</p>}
 			</div>
 
 			<div className="detail chat">
-				<div className="chat-log">
-					{history?.turns.map((t, i) => (
-						<div key={i} className={`bubble bubble-${t.role}`}>
-							<p>{t.text}</p>
-							{t.command && (
-								<p className="bubble-meta">
-									ran <code>{t.command}</code> → exit {t.exit}
-								</p>
-							)}
-						</div>
-					))}
+				<header className="chat-head">
+					<MessageSquare size={16} />
+					<h2 className="row-clip">{title}</h2>
+				</header>
 
-					{help.length > 0 && (
-						<div className="bubble bubble-run">
-							{help.map((row, i) => (
-								<p key={i} className="line line-log">
-									{row}
-								</p>
-							))}
-						</div>
-					)}
-
-					{live.map((job) => (
-						<div key={job.id} className="bubble bubble-run">
-							{job.events.map((e, i) => (
-								<p key={i} className={`line line-${e.kind}`}>
-									{e.text}
-								</p>
-							))}
-							{!job.done && (
-								<p className="line line-progress">
-									<span>working…</span>
-									<StopButton
-										jobId={job.id}
-										stopping={stopping === job.id}
-										onStop={onStop}
-										onForce={onForce}
-										compact
-									/>
-								</p>
-							)}
-							{job.cancelled && <p className="line line-log">⏹ stopped — evidence saved.</p>}
-							{job.error && <p className="line line-error">{job.error}</p>}
-						</div>
-					))}
-					<div ref={bottom} />
-				</div>
-
-				{suggestions.length > 0 && (
-					<div className="palette">
-						{suggestions.map((c) => (
-							<button key={c.name} className="palette-row" onClick={() => setText(`/${c.name} `)}>
-								<code>{usage(c)}</code>
-								<span className="row-sub">
-									{c.help}
-									{c.human_only ? ' · you confirm' : ''}
-								</span>
-							</button>
-						))}
-					</div>
-				)}
-
-				<form
-					className="composer"
-					onSubmit={(e) => {
-						e.preventDefault()
-						send()
+				<div
+					className="chat-log"
+					ref={log}
+					onScroll={(e) => {
+						const el = e.currentTarget
+						stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
 					}}
 				>
-					<input
-						value={text}
-						onChange={(e) => setText(e.target.value)}
-						onKeyDown={(e) => {
-							const first = suggestions[0]
-							if (e.key === 'Tab' && first) {
-								e.preventDefault()
-								setText(`/${first.name} `)
-							}
-							if (e.key === 'Escape') setText('')
-						}}
-						placeholder='e.g. "plan scenarios for the login flow", or /crawl --pages 5'
+					<div className="chat-column">
+						{empty && (
+							<div className="chat-empty">
+								<h2>What should we test?</h2>
+								<p className="row-sub">
+									Claude reads the app map, drafts scenarios for you to approve, and runs them in a real browser.
+								</p>
+								{suggestions.map((s) => (
+									<button key={s} className="suggestion" disabled={busy || !canRun} onClick={() => onSay(s)}>
+										{s}
+									</button>
+								))}
+							</div>
+						)}
+						<Transcript
+							items={items}
+							live={thinking}
+							scenarios={state.scenarios}
+							busy={busy}
+							canRun={canRun}
+							onApprove={onApprove}
+							onRun={(id) => onSay(`Run the approved scenario ${id}.`)}
+							onOpen={onOpenScenario}
+						/>
+						{thinking && (
+							<div className="thinking">
+								<span />
+								<span />
+								<span />
+							</div>
+						)}
+					</div>
+				</div>
+
+				<div className="chat-column">
+					<Composer
+						onSend={onSay}
+						onStop={() => mine && onStop(mine.id)}
+						running={thinking}
+						disabled={busy || !canRun}
+						hint={busy && !thinking ? 'Waiting for the current job to finish…' : 'Ask Claude to plan, run or explore…'}
 					/>
-					<button type="submit" className="primary">
-						Send
-					</button>
-				</form>
+				</div>
 			</div>
 		</div>
 	)
