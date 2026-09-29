@@ -80,7 +80,16 @@
       "Bash(sed -n '/add_parser\\(.connect/,/^$/p;/add_parser\\(.auth/,/^$/p' nkqa/cli.py)",
       "Bash(sed -n '/^async def connect/,/^async def _sign_in/p' nkqa/actions.py)",
       "Bash(claude mcp *)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(claude plugin *)",
+      "Bash(git -c 'user.name=Gaurav Sah' -c user.email=sarangkkl2@gmail.com commit -q -m 'Fix the marketplace manifest and add USAGE.md *)",
+      "Bash(venv/bin/pyright --project pyproject.toml)",
+      "Bash(venv/bin/pytest tests/test_workspace.py tests/test_mcp_server.py -q)",
+      "Bash(venv/bin/python -c \"import nkqa, sys; print\\('qa resolves to:', nkqa.__file__\\)\")",
+      "Bash(/Users/gaurav/Documents/dreams/nkqa/nkqa-public/venv/bin/python -c \"import nkqa; print\\(nkqa.__file__\\)\")",
+      "Bash(rm -rf /private/tmp/claude-501/-Users-gaurav-Documents-dreams-nkqa-browser-use/8ede50a2-f6b6-413c-9b83-df34d77b4d62/scratchpad/agentfiles)",
+      "Bash(sed -n '/What a workspace looks like/,/^```$/p' README.md)",
+      "Bash(git -c 'user.name=Gaurav Sah' -c user.email=sarangkkl2@gmail.com commit -q -m 'qa init writes the files an agent reads *)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",
