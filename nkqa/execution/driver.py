@@ -22,14 +22,19 @@ from typing import Any, Literal
 
 from browser_use import ActionResult, Tools
 from browser_use.browser import BrowserProfile, BrowserSession
+from browser_use.dom.views import DOMInteractedElement  # pyright: ignore[reportMissingTypeStubs]
 from pydantic import BaseModel, Field
 
+from nkqa.execution import checks
 from nkqa.execution.evidence import STEP_LOG
 from nkqa.execution.stream import STEP_SHOTS, redact
 
 # The DOM text is capped like the chat context is: past this the agent should scroll, not read.
 STATE_BUDGET = 40_000
 MAX_WAIT = 30.0
+# Typed as-is into a field, replaced by a per-run stamp: "QA project {{unique}}" can be created
+# again on every replay without colliding with the last one. The recording keeps the token.
+UNIQUE = '{{unique}}'
 
 
 class StepRecord(BaseModel):
@@ -43,6 +48,9 @@ class StepRecord(BaseModel):
 	error: str = ''
 	screenshot: str = ''  # relative to the run dir, like `steps/step-003.png`
 	at: str = ''
+	# What an index pointed at, fingerprinted before acting: indices are only valid for one page
+	# load, so this is how a replay finds the same element again.
+	element: dict[str, Any] | None = None
 
 
 class StepLog(BaseModel):
@@ -51,6 +59,7 @@ class StepLog(BaseModel):
 	started_at: str = ''
 	finished_at: str = ''
 	aborted: bool = False
+	replay: bool = False  # played back from a library recording, no model involved
 	steps: list[StepRecord] = Field(default_factory=list)
 
 
@@ -68,6 +77,10 @@ def _now() -> str:
 	return datetime.now().isoformat(timespec='seconds')
 
 
+def with_unique(params: dict[str, Any], stamp: str) -> dict[str, Any]:
+	return {k: v.replace(UNIQUE, stamp) if isinstance(v, str) else v for k, v in params.items()}
+
+
 def describe(raw: Any) -> tuple[str, str]:
 	"""(result, error) from whatever an action returned."""
 	if isinstance(raw, ActionResult):
@@ -80,11 +93,19 @@ def describe(raw: Any) -> tuple[str, str]:
 class Driver:
 	"""One browser for one run. Actions are serialised; the agent calls one at a time anyway."""
 
-	def __init__(self, run_dir: Path, secrets: dict[str, str | dict[str, str]], headless: bool, scenario_id: str = ''):
+	def __init__(
+		self,
+		run_dir: Path,
+		secrets: dict[str, str | dict[str, str]],
+		headless: bool,
+		scenario_id: str = '',
+		replay: bool = False,
+	):
 		self.run_dir = run_dir
 		self.secrets = secrets  # the live dict `HumanInTheLoop` writes into; never copied
 		self.headless = headless
-		self.log = StepLog(scenario_id=scenario_id, started_at=_now())
+		self.log = StepLog(scenario_id=scenario_id, started_at=_now(), replay=replay)
+		self.unique = datetime.now().strftime('%m%d-%H%M%S')
 		# Element indices come from the last state the agent saw. After any action they are
 		# stale, and clicking a stale index is how a run clicks the wrong thing.
 		self.fresh = False
@@ -146,9 +167,10 @@ class Driver:
 		assert self.tools is not None
 		async with self._lock:
 			url_before = await self._url()
+			element = await self._fingerprint(params.get('index'))
 			try:
 				raw = await self.tools.registry.execute_action(
-					action, params, browser_session=session, sensitive_data=self.secrets
+					action, with_unique(params, self.unique), browser_session=session, sensitive_data=self.secrets
 				)
 				result, error = describe(raw)
 			except Exception as e:  # a failed click is a step that failed, not a crashed run
@@ -160,9 +182,56 @@ class Driver:
 			saved = ''
 			with contextlib.suppress(Exception):
 				saved = self._keep(n, await session.take_screenshot())
-			self._record(action, params, url_before, url_after, title, result, error, saved)
+			self._record(action, params, url_before, url_after, title, result, error, saved, element)
 		text = f'{result or error}\nNow at: {url_after} — {title}\nCall browser_state before the next click or type.'
 		return redact(text, self.secrets)
+
+	@property
+	def failed(self) -> bool:
+		"""Whether the last recorded step went wrong."""
+		return bool(self.log.steps and self.log.steps[-1].error)
+
+	async def check(
+		self, step: int, kind: str, value: str, index: int | None = None, node: Any = None
+	) -> tuple[bool, str]:
+		"""Evaluate one assertion now and record it, so a replay can evaluate it again.
+
+		The element kinds take an `index` from the last state (live) or an already-located
+		`node` (replay); either way the element is fingerprinted into the record.
+		"""
+		if kind not in checks.KINDS:
+			raise ValueError(f'Unknown check kind "{kind}". Use one of: {", ".join(checks.KINDS)}')
+		session = self._require()
+		async with self._lock:
+			element: dict[str, Any] | None = None
+			if kind in checks.ELEMENT_KINDS:
+				if node is None and index is not None:
+					node = (await session.get_selector_map()).get(index)
+				if node is None and index is None:
+					raise ValueError(f'{kind} needs the element index from browser_state.')
+				if node is not None:
+					element = self._clean_json(DOMInteractedElement.load_from_enhanced_dom_tree(node).to_dict())
+			try:
+				passed, seen = await checks.evaluate(session, kind, with_unique({'v': value}, self.unique)['v'], node)
+			except Exception as e:  # a page that refuses to be read fails the check, not the run
+				passed, seen = False, f'could not check: {type(e).__name__}: {e}'
+			url = await self._url()
+			self._record(
+				'check',
+				{'step': step, 'kind': kind, 'value': value},
+				url,
+				url,
+				await self._title(),
+				seen if passed else '',
+				'' if passed else seen,
+				'',
+				element,
+			)
+		return passed, redact(seen, self.secrets)
+
+	def checked_steps(self) -> set[int]:
+		"""Scenario steps with at least one passing check."""
+		return {int(r.params.get('step') or 0) for r in self.log.steps if r.action == 'check' and not r.error}
 
 	async def wait(self, seconds: float) -> str:
 		self._require()
@@ -206,6 +275,21 @@ class Driver:
 			return await self._require().get_current_page_title()
 		return ''
 
+	async def _fingerprint(self, index: Any) -> dict[str, Any] | None:
+		"""The element an index points at in the state the agent last read - before acting, since
+		a click can navigate away and take the element with it."""
+		if not isinstance(index, int):
+			return None
+		with contextlib.suppress(Exception):
+			node = (await self._require().get_selector_map()).get(index)
+			if node is not None:
+				return self._clean_json(DOMInteractedElement.load_from_enhanced_dom_tree(node).to_dict())
+		return None
+
+	def _clean_json(self, value: dict[str, Any]) -> dict[str, Any]:
+		"""An input's attributes can carry what was typed into it: never record a secret."""
+		return json.loads(redact(json.dumps(value, default=str), self.secrets))
+
 	def _keep(self, n: int, png: bytes) -> str:
 		target = self.run_dir / STEP_SHOTS / f'step-{n:03d}.png'
 		target.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +306,7 @@ class Driver:
 		result: str,
 		error: str,
 		shot: str,
+		element: dict[str, Any] | None = None,
 	) -> None:
 		def clean(s: str) -> str:
 			return redact(s, self.secrets)
@@ -238,6 +323,7 @@ class Driver:
 				error=clean(error),
 				screenshot=shot,
 				at=_now(),
+				element=element,
 			)
 		)
 		self._save()

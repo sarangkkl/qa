@@ -27,7 +27,11 @@ URLS = {
 PAID_PLANS = frozenset({'pro', 'max', 'team', 'enterprise'})
 # Read the app's own source to understand it, drive nkqa - and nothing that writes or runs.
 ALLOWED = 'mcp__nkqa__* Read Glob Grep'
-DENIED = 'Bash Edit Write NotebookEdit WebFetch WebSearch'
+# Approval is the human's button on the card, never something Claude does from chat text.
+DENIED = 'Bash Edit Write NotebookEdit WebFetch WebSearch mcp__nkqa__approve_scenario'
+# Project and local settings only: the user's own plugins, hooks and output styles are for
+# their coding sessions, and leaked into the QA agent's persona when they were loaded.
+SETTING_SOURCES = 'project,local'
 SESSION_ID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 STATUS_TTL = 60.0
 
@@ -280,7 +284,7 @@ async def make_title(first_message: str) -> str:
 # --- one turn --------------------------------------------------------------------------
 
 
-def command(claude: str, mcp_url: str, token: str, session_id: str, resume: bool) -> list[str]:
+def command(claude: str, mcp_url: str, token: str, session_id: str, resume: bool, brief: str) -> list[str]:
 	config = {'mcpServers': {'nkqa': {'type': 'http', 'url': mcp_url, 'headers': {'Authorization': f'Bearer {token}'}}}}
 	return [
 		claude,
@@ -297,11 +301,17 @@ def command(claude: str, mcp_url: str, token: str, session_id: str, resume: bool
 		DENIED,
 		'--permission-mode',
 		'dontAsk',
+		'--setting-sources',
+		SETTING_SOURCES,
+		'--append-system-prompt',
+		brief,
 		*(['--resume', session_id] if resume else ['--session-id', session_id]),
 	]
 
 
-async def turn(root: Path, prompt: str, session_id: str, mcp_url: str, token: str, send: Send, job_id: str) -> int:
+async def turn(
+	root: Path, prompt: str, session_id: str, mcp_url: str, token: str, send: Send, job_id: str, brief: str
+) -> int:
 	"""One message in, Claude's stream out as `claude` frames. Cancelling kills the process."""
 	claude = find_claude()
 	if not claude:
@@ -309,7 +319,7 @@ async def turn(root: Path, prompt: str, session_id: str, mcp_url: str, token: st
 		return 2
 	resume = (project_dir(root) / f'{session_id}.jsonl').is_file()
 	proc = await asyncio.create_subprocess_exec(
-		*command(claude, mcp_url, token, session_id, resume),
+		*command(claude, mcp_url, token, session_id, resume, brief),
 		cwd=root,
 		stdin=asyncio.subprocess.PIPE,
 		stdout=asyncio.subprocess.PIPE,

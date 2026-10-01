@@ -67,9 +67,17 @@ def build_parser() -> argparse.ArgumentParser:
 	bug.add_argument('--project', default='', metavar='KEY', help='Jira project key (default: jira.project in config)')
 
 	replay = sub.add_parser('replay', help='replay a recorded run deterministically, without the LLM')
-	replay.add_argument('name', nargs='?', default='', help='run name, dir, or history.json path')
+	replay.add_argument(
+		'name', nargs='?', default='', help='a Library test id or folder, a run name, dir, or history.json path'
+	)
 	replay.add_argument('--all', action='store_true', help='replay every recorded run (CI mode)')
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
+
+	sub.add_parser('library', help='list the Library: tests that passed and replay without a model')
+	library_replay = sub.add_parser('library-replay', help='replay Library tests with no model')
+	library_replay.add_argument('target', nargs='?', default='', help='a test id or folder; empty for all')
+	library_save = sub.add_parser('library-save', help='keep a passing run as a Library test (human only)')
+	library_save.add_argument('run', help='run dir name under runs/')
 
 	ticket = sub.add_parser('ticket', help='read a Jira ticket and show it (no scenarios written)')
 	ticket.add_argument('id', help='issue key like PROJ-123, or its browse URL')
@@ -188,6 +196,12 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.compare(ws, ch, args.first, args.second)))
 	if command == 'vault':
 		sys.exit(actions.run_sync(actions.vault(ws, ch, args.action, args.name, args.scenario)))
+	if command == 'library':
+		sys.exit(actions.run_sync(actions.library_list(ws, ch)))
+	if command == 'library-replay':
+		sys.exit(actions.run_sync(actions.library_replay(ws, ch, args.target)))
+	if command == 'library-save':
+		sys.exit(actions.run_sync(actions.library_save(ws, ch, args.run)))
 	if command == 'replay':
 		sys.exit(actions.run_sync(actions.replay(ws, ch, args.name, args.all, args.var)))
 

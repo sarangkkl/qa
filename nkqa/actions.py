@@ -86,23 +86,36 @@ async def list_scenarios(ws: Workspace, ch: Channel) -> int:
 
 
 async def approve(ws: Workspace, ch: Channel, scenario_id: str) -> int:
-	"""Human-only: never exposed to the chat agent."""
-	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
-	if s is None:
-		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
+	"""Human-only: never exposed to the chat agent.
+
+	Several ids separated by spaces are one decision: every body is shown in the one prompt, and
+	one yes approves each of them - the desktop's "Approve all" under a drafted plan.
+	"""
+	ids = scenario_id.split()
+	found = [scenarios_mod.find(ws.scenarios_dir, i) for i in ids]
+	missing = [i for i, s in zip(ids, found, strict=True) if s is None]
+	if not ids or missing:
+		await ch.log(f'No scenario "{" ".join(missing) or scenario_id}". See:  qa scenarios')
 		return 2
-	state = s.runnable()
-	if state == 'ok':
-		await ch.log(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
+	todo = [s for s in found if s is not None and s.runnable() != 'ok']
+	for s in found:
+		if s is not None and s.runnable() == 'ok':
+			await ch.log(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
+	if not todo:
 		return 0
-	body = f'\n──── {s.path} ────\n\n{s.path.read_text(encoding="utf-8")}\n────'
-	if state == 'stale':
-		body += f'\n⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.'
-	if not await ch.confirm(f'Approve "{s.id}" for execution? [y/N]: ', body=body):
+	body = ''
+	for s in todo:
+		body += f'\n──── {s.path} ────\n\n{s.path.read_text(encoding="utf-8")}\n────'
+		if s.runnable() == 'stale':
+			body += f'\n⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.'
+	what = f'"{todo[0].id}"' if len(todo) == 1 else f'these {len(todo)} scenarios'
+	if not await ch.confirm(f'Approve {what} for execution? [y/N]: ', body=body):
 		await ch.log('Not approved.')
 		return 1
-	scenarios_mod.approve(s, scenarios_mod.git_identity(ws.root))
-	await ch.log(f'✅ Approved (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
+	identity = scenarios_mod.git_identity(ws.root)
+	for s in todo:
+		scenarios_mod.approve(s, identity)
+		await ch.log(f'✅ Approved {s.id} (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
 	return 0
 
 
@@ -491,10 +504,39 @@ async def replay(
 	session_hitl = _hitl(ws, hitl, ch)
 	if all_runs:
 		return await replay_all(ws, session_hitl, ch, var or [])
+	from nkqa import library
+
+	# A Library test or folder: the recordings Claude runs left, replayed with no model.
+	if run and library.selected(ws, run):
+		return await library.replay(ws, session_hitl, ch, run)
 	history_file = await resolve_history_file(ws, ch, run)
 	if history_file is None:
 		return 2
 	return await _replay(ws, session_hitl, ch, history_file, var or [])
+
+
+async def library_list(ws: Workspace, ch: Channel) -> int:
+	from nkqa import library
+
+	tests = library.entries(ws)
+	if not tests:
+		await ch.log('The Library is empty. Save a passing run from the chat, or:  qa library-save <run>')
+		return 0
+	for t in tests:
+		await ch.log(f'{t["last_verdict"] or "—":<8} {t["id"]}  ({t["steps"]} steps)')
+	return 0
+
+
+async def library_replay(ws: Workspace, ch: Channel, target: str = '', hitl: HumanInTheLoop | None = None) -> int:
+	from nkqa import library
+
+	return await library.replay(ws, _hitl(ws, hitl, ch), ch, target)
+
+
+async def library_save(ws: Workspace, ch: Channel, run: str, hitl: HumanInTheLoop | None = None) -> int:
+	from nkqa import library
+
+	return await library.save(ws, _hitl(ws, hitl, ch), ch, run)
 
 
 async def file_bug(

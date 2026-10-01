@@ -1,6 +1,6 @@
 import { listen } from '@tauri-apps/api/event'
 import {
-	ListChecks,
+	Library as LibraryIcon,
 	Map as MapIcon,
 	MessageSquare,
 	Monitor,
@@ -24,22 +24,22 @@ import {
 	type InitOptions,
 } from './api/connection'
 import { Session, type Job } from './api/socket'
-import type { AskFrame, Autonomy, Connection, Health, ImageFrame, WorkspaceState } from './api/types'
+import type { AskFrame, Autonomy, Connection, Health, ImageFrame, LibraryTest, WorkspaceState } from './api/types'
 import { AskModal } from './components/AskModal'
 import { THEMES, useTheme, type Theme } from './theme'
 import { AppMap } from './views/AppMap'
 import { Chat, type Turn } from './views/Chat'
 import { ClaudeGate } from './views/ClaudeGate'
 import { Credentials } from './views/Credentials'
+import { Library } from './views/Library'
 import { LivePane } from './views/LivePane'
 import { Runs } from './views/Runs'
-import { Scenarios } from './views/Scenarios'
 import { WorkspacePicker } from './views/WorkspacePicker'
 
-type Tab = 'chat' | 'scenarios' | 'appmap' | 'flows' | 'runs' | 'settings'
+type Tab = 'chat' | 'library' | 'appmap' | 'flows' | 'runs' | 'settings'
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
 	{ id: 'chat', label: 'Chat', icon: MessageSquare },
-	{ id: 'scenarios', label: 'Scenarios', icon: ListChecks },
+	{ id: 'library', label: 'Library', icon: LibraryIcon },
 	{ id: 'appmap', label: 'App map', icon: MapIcon },
 	{ id: 'flows', label: 'Flows', icon: Workflow },
 	{ id: 'runs', label: 'Runs', icon: PlayCircle },
@@ -89,13 +89,17 @@ export default function App() {
 	const [autoPick, setAutoPick] = useState(0)
 	const [sideOpen, setSideOpen] = useState(() => remembered(SIDE_KEY, true))
 	const [liveOpen, setLiveOpen] = useState(false)
-	// Which scenario the Scenarios view should show when a chat card says "Open".
+	const [library, setLibrary] = useState<LibraryTest[]>([])
+	// What the Library or Runs view should show when a chat card says "Open" or "Evidence".
 	const [focus, setFocus] = useState('')
+	const [runFocus, setRunFocus] = useState('')
 	const [theme, setTheme] = useTheme()
 	const session = useRef<Session | null>(null)
 	// Each chat turn's chat and text, by job id. Lives here, not in Chat, because Chat unmounts
 	// on every tab switch and a turn in flight must not vanish with it.
 	const turns = useRef(new Map<string, Turn>())
+	// run name -> its library-save job, so a card still knows it is saving after a tab switch.
+	const saves = useRef(new Map<string, string>())
 	// The live pane opened itself for a run, so it may close itself after; one you opened stays.
 	const autoLive = useRef(false)
 
@@ -127,6 +131,10 @@ export default function App() {
 		if (!connection) return
 		api.workspace(connection).then(setState).catch((e: Error) => setStatus(e.message))
 		api.health(connection).then(setHealth).catch(() => undefined)
+		api
+			.library(connection)
+			.then((r) => setLibrary(r.tests))
+			.catch(() => setLibrary([]))
 	}, [connection])
 
 	const recheck = useCallback(async () => {
@@ -240,8 +248,20 @@ export default function App() {
 
 	const openScenario = useCallback((id: string) => {
 		setFocus(id)
-		setTab('scenarios')
+		setTab('library')
 	}, [])
+
+	const openRun = useCallback((run: string) => {
+		setRunFocus(run)
+		setTab('runs')
+	}, [])
+
+	const saveToLibrary = useCallback((run: string) => {
+		const id = session.current?.command('library-save', { run })
+		if (id) saves.current.set(run, id)
+	}, [])
+
+	const replay = useCallback((target: string) => session.current?.command('library-replay', { target }), [])
 
 	const toggleSide = useCallback(() => {
 		setSideOpen((open) => {
@@ -376,18 +396,14 @@ export default function App() {
 						onStop={stop}
 						onApprove={approve}
 						onOpenScenario={openScenario}
+						library={library}
+						saves={saves}
+						onSave={saveToLibrary}
+						onOpenRun={openRun}
 					/>
 				)}
-				{tab === 'scenarios' && (
-					<Scenarios
-						connection={connection}
-						scenarios={state.scenarios}
-						busy={busy}
-						canRun={ready}
-						focus={focus}
-						onApprove={approve}
-						onRun={(id) => say(`Run the approved scenario ${id}.`)}
-					/>
+				{tab === 'library' && (
+					<Library connection={connection} tests={library} busy={busy} focus={focus} onReplay={replay} />
 				)}
 				{tab === 'appmap' && <AppMap connection={connection} files={state.appmap} flowsOnly={false} />}
 				{tab === 'flows' && <AppMap connection={connection} files={state.appmap} flowsOnly={true} />}
@@ -398,6 +414,7 @@ export default function App() {
 						session={session.current}
 						busy={busy}
 						hasJira={hasJira}
+						focus={runFocus}
 					/>
 				)}
 				{tab === 'settings' && session.current && (

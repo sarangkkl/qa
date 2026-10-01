@@ -10,9 +10,9 @@ import { MessageSquare, SquarePen } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as api from '../api/client'
 import type { Job } from '../api/socket'
-import type { ChatDetail, ChatSummary, Connection, WorkspaceState } from '../api/types'
+import type { ChatDetail, ChatSummary, Connection, LibraryTest, WorkspaceState } from '../api/types'
 import { Composer } from '../components/chat/Composer'
-import { toItems, Transcript, type Item } from '../components/chat/Transcript'
+import { toItems, Transcript, type Item, type SaveState } from '../components/chat/Transcript'
 
 export interface Turn {
 	chat: string
@@ -47,6 +47,10 @@ export function Chat({
 	onStop,
 	onApprove,
 	onOpenScenario,
+	library,
+	saves,
+	onSave,
+	onOpenRun,
 }: {
 	connection: Connection
 	state: WorkspaceState
@@ -62,6 +66,11 @@ export function Chat({
 	onStop: (id: string) => void
 	onApprove: (id: string) => void
 	onOpenScenario: (id: string) => void
+	library: LibraryTest[]
+	/** run name -> the library-save job for it, kept above so it survives tab switches */
+	saves: RefObject<Map<string, string>>
+	onSave: (run: string) => void
+	onOpenRun: (run: string) => void
 }) {
 	const [list, setList] = useState<ChatSummary[]>([])
 	const [history, setHistory] = useState<ChatDetail | null>(null)
@@ -108,6 +117,18 @@ export function Chat({
 		}
 		return out
 	}, [history, chatId, jobs, absorbed])
+
+	const inLibrary = useMemo(() => new Set(library.map((t) => t.id)), [library])
+	const save = (run: string, scenarioId: string): SaveState => {
+		if (library.some((t) => t.id === scenarioId && t.recorded_from === run)) return { kind: 'saved' }
+		const job = jobs.find((j) => j.id === saves.current.get(run))
+		if (job && !job.done) return { kind: 'saving' }
+		if (job && job.code !== 0) {
+			const said = job.events.map((e) => e.text).find((t) => t.startsWith('Not saved')) ?? ''
+			return { kind: 'failed', reason: said || job.error || 'Not saved.' }
+		}
+		return inLibrary.has(scenarioId) ? { kind: 'other' } : { kind: 'idle' }
+	}
 
 	const mine = running && turns.current.get(running.id)?.chat === chatId ? running : null
 	const thinking = mine !== null
@@ -178,14 +199,25 @@ export function Chat({
 							</div>
 						)}
 						<Transcript
+							connection={connection}
 							items={items}
 							live={thinking}
 							scenarios={state.scenarios}
 							busy={busy}
 							canRun={canRun}
 							onApprove={onApprove}
-							onRun={(id) => onSay(`Run the approved scenario ${id}.`)}
+							onRun={(ids) =>
+								onSay(
+									ids.length === 1
+										? `Run the approved scenario ${ids[0]}.`
+										: `Run these approved scenarios in order, one run each: ${ids.join(', ')}.`,
+								)
+							}
 							onOpen={onOpenScenario}
+							save={save}
+							onSave={onSave}
+							onOpenRun={onOpenRun}
+							library={inLibrary}
 						/>
 						{thinking && (
 							<div className="thinking">

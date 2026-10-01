@@ -39,6 +39,20 @@ agent drove it, via MCP).
 **Verdicts are deterministic.** Any `fail` → the run fails. Any `blocked`, or a step with no
 verdict → `blocked`. Never a silent pass. Exit codes: `0` pass, `1` fail, `2` usage/not-found.
 
+**Every expectation is proven by a check.** While it runs a scenario, the agent records a `check`
+for each EXPECT: text on the page, the URL, the title, an element or its text. A step cannot be
+marked `pass` without one. Names of things a test creates carry `{{unique}}` (e.g.
+`QA project {{unique}}`), which becomes a fresh stamp on every run, so reruns never collide.
+
+**The Library is the regression suite.** A run that passed can be **saved to the Library**, which
+is a human's call. It is kept only if its recording also replays once by itself. From then on it
+**replays with no model**: every recorded step is repeated, each element found again by its
+fingerprint (not its old position), and every check re-evaluated. A replay stops at the first
+thing that does not hold, and what to do about it (file a bug, re-record, remove) is the QA's
+call; nothing heals itself. The recording sits next to the scenario
+(`scenarios/<id>.recording.json`) and is bound to its approval: edit the scenario and it leaves
+the Library until it is recorded again. Folders are the scenario ids (`auth/login` is in `auth`).
+
 **Three gates that stay human.**
 
 1. **Approval** — no agent can approve a scenario, in any mode.
@@ -74,6 +88,7 @@ Install: see [INSTALL.md](INSTALL.md). Then talk normally, or use the three slas
 
 ```
 "set up nkqa for this app, it runs at https://dev.myapp.com"
+# ^ also writes AGENTS.md and the MCP configs, so the next agent needs no explaining
 /nkqa:plan the login flow
 "show me what you drafted"
 "approve auth/login"            → dialog on your screen; you confirm
@@ -135,7 +150,10 @@ itself.
 |---|---|
 | `qa run <id> [--model M]` | execute an approved scenario |
 | `qa explore [url] [focus] [--name N]` | freeform testing, no scenario |
-| `qa replay <run> [--all]` | re-run a recording deterministically — no model, no cost |
+| `qa replay <test \| folder \| run> [--all]` | replay a Library test or folder, or an old recorded run — no model, no cost |
+| `qa library` | list the Library, with each test's last result |
+| `qa library-replay [test \| folder]` | replay Library tests with no model; all of them when empty |
+| `qa library-save <run>` | keep a passing run as a Library test (human only; it must replay once first) |
 | `qa suite [tag] [--strict]` | run every approved scenario; one report for CI |
 | `qa compare [a] [b]` | what changed between two suite runs |
 | `qa list` | recorded runs |
@@ -195,6 +213,10 @@ reconnect. Ctrl+C cancels the running job; Ctrl+D leaves.
 ## 5. The workspace
 
 ```
+AGENTS.md         the QA role, read by any agent that opens this folder
+CLAUDE.md         a pointer to AGENTS.md
+.mcp.json         registers the nkqa tools for Claude Code
+.cursor/mcp.json  the same, for Cursor
 config.yaml       app name, base URL, model roles, connectors
 vault.yaml        credential names, descriptions, origins — never values
 .env              API keys (gitignored)
@@ -205,6 +227,10 @@ runs/suite--*/    suite.md + suite.json for CI
 chats/            conversations, committed — the reasoning behind a scenario stays reviewable
 .nkqa/            machine-local, gitignored
 ```
+
+The first four are written when the workspace is created — never overwritten, since the folder
+is usually the app's own repo. Commit them and a teammate who clones it gets the same setup with
+nothing to install.
 
 `config.yaml` in brief:
 
@@ -256,15 +282,19 @@ qa suite --strict
 ```
 Runs every approved scenario, writes `runs/suite--<stamp>/suite.{md,json}`, exits `0` or `1`.
 `qa compare` diffs the two newest suites, so a regression is visible as a change, not a wall of
-output. `qa replay --all` re-runs recordings with no model at all — free and repeatable.
+output. `qa library-replay` replays every Library test with no model at all — free and
+repeatable, which is what a release regression should be.
 
 ---
 
 ## 7. Limits worth knowing
 
-- Approval dialogs on the MCP path are **macOS only** right now. Elsewhere every gate denies.
+- The approval dialogs need a dialog tool: osascript (macOS), PowerShell (Windows) or `zenity`
+  (Linux — install it). Without one, nkqa falls back to Tk, and failing that denies every gate,
+  which leaves it read-only.
 - One run at a time per workspace; one workspace per agent session.
-- `qa replay` cannot replay an MCP-driven run (`steps.json`) — your agent made those decisions,
-  there is no recorded model trace to re-execute.
+- An agent-driven run replays only once it is in the Library, since the Library is where its
+  recording is kept. A heavily dynamic page (virtualised lists, generated ids) can defeat the
+  element fingerprint; that shows up as a clear replay failure to re-record.
 - Jira needs Node.js, and the connector must be named exactly `jira`.
 - The testing agent can never file bugs on its own: Jira is not exposed to it during runs.

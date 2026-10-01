@@ -107,6 +107,8 @@ export interface WorkspaceState {
 
 export interface ScenarioDetail extends ScenarioSummary {
 	body: string
+	preconditions: string[]
+	steps: { action: string; expect: string }[]
 }
 
 export interface StepVerdict {
@@ -130,6 +132,20 @@ export interface RunDetail {
 	shots: string[]
 	/** The LLM transcript, one file per step, in step order. */
 	conversation: string[]
+}
+
+/** A Library test: passed, proven by checks, and replayable with no model. */
+export interface LibraryTest {
+	id: string
+	title: string
+	/** The id's path without its last part - `auth/login` is in `auth`. '' at the top. */
+	folder: string
+	steps: number
+	saved_at: string
+	/** The Claude run its recording came from. */
+	recorded_from: string
+	last_run: string
+	last_verdict: string
 }
 
 /** A Claude Code session in this workspace's folder, whoever started it. */

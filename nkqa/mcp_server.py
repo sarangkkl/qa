@@ -410,10 +410,24 @@ def build_server(session: Session) -> FastMCP:
 	async def type_text(index: int, text: str, clear: bool = True) -> str:
 		"""Type into the input with this index. For credentials NEVER type a real value: call
 		ask_credential(name) first, then pass the literal placeholder `<secret>name</secret>` as
-		`text` - nkqa substitutes the real value inside the browser and it never reaches you."""
+		`text` - nkqa substitutes the real value inside the browser and it never reaches you.
+		`{{unique}}` in the text becomes a per-run stamp: use it in names of things you create."""
 		return _clean(
 			session, await session.require_fresh().act('input', {'index': index, 'text': text, 'clear': clear})
 		)
+
+	@tool()
+	async def check(step: int, kind: str, value: str = '', index: int | None = None) -> str:
+		"""Prove an EXPECT of scenario step `step`, now, and record it for replay. Kinds:
+		text_visible / text_absent (value = text on the page), url_contains, title_contains,
+		element_visible (index from the latest browser_state), element_text (index + value).
+		Call it right after the action that should satisfy the expectation - a replay re-runs
+		exactly these checks with no model, so they are what the regression test asserts.
+		finish_run refuses `pass` for a step with no passing check. A failed check is a failed
+		step if the app is wrong; if you checked the wrong thing, check again."""
+		driver = session.require_fresh() if index is not None else session.require_run()
+		passed, seen = await driver.check(step, kind, value, index)
+		return _clean(session, f'{"✅ passed" if passed else "❌ FAILED"} (step {step}, {kind}): {seen}')
 
 	@tool()
 	async def scroll(direction: str = 'down', pages: float = 1.0, index: int | None = None) -> str:
@@ -485,6 +499,16 @@ def build_server(session: Session) -> FastMCP:
 		if s is None:
 			session.require_run()
 			raise ValueError('This is an explore, not a scenario run: use finish_explore(summary).')
+		# Before closing: a pass nobody checked is a claim a replay cannot re-prove, and the run
+		# must stay open so the agent can still record the check.
+		proven = session.require_run().checked_steps()
+		expecting = {i for i, step in enumerate(s.steps, 1) if step.expect}
+		unproven = [v.step for v in steps if v.verdict == 'pass' and v.step in expecting and v.step not in proven]
+		if unproven:
+			raise ValueError(
+				f'Step(s) {", ".join(map(str, unproven))} are marked pass but have no passing check. '
+				'Record one per EXPECT with check(step, kind, value), then call finish_run again.'
+			)
 		run_dir = await session.end_run()
 		verdict = write_results(run_dir, s, ScenarioResult(steps=steps, summary=summary), evidence=DRIVER_EVIDENCE)
 		session.scenario = None

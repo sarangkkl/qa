@@ -71,6 +71,15 @@ class FakeDriver:
 	async def wait(self, seconds: float) -> str:
 		return f'Waited {seconds:g}s.'
 
+	async def check(self, step: int, kind: str, value: str, index: int | None = None) -> tuple[bool, str]:
+		self.calls.append(('check', {'step': step, 'kind': kind, 'value': value}))
+		self._save()
+		passed = 'nope' not in value
+		return passed, f'"{value}" is on the page' if passed else f'"{value}" is not on the page'
+
+	def checked_steps(self) -> set[int]:
+		return {int(p['step']) for a, p in self.calls if a == 'check' and 'nope' not in p['value']}
+
 	async def tabs(self) -> str:
 		return '[1234] Sign in'
 
@@ -275,6 +284,13 @@ def test_a_run_from_start_to_finish(tmp_path: Path) -> None:
 			{'step': 1, 'verdict': 'pass', 'note': ''},
 			{'step': 2, 'verdict': 'fail', 'note': 'expected dashboard, got 500'},
 		]
+		# A pass nobody checked cannot be replayed: refused, and the run stays open to fix it.
+		text, err = await call('finish_run', {'steps': steps, 'summary': 'login is broken'})
+		assert err and 'Step(s) 1' in text and 'check(' in text and session.driver is not None
+		text, err = await call('check', {'step': 1, 'kind': 'text_visible', 'value': 'nope'})
+		assert not err and 'FAILED' in text
+		text, err = await call('check', {'step': 1, 'kind': 'text_visible', 'value': 'Sign in'})
+		assert not err and 'passed' in text
 		text, err = await call('finish_run', {'steps': steps, 'summary': 'login is broken'})
 		assert not err and 'FAIL' in text and 'update_appmap' in text and 'Steps executed' in text
 		assert driver.closed is False and session.driver is None

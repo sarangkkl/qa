@@ -261,6 +261,37 @@ def test_ask_round_trip_approves_a_scenario(client: TestClient, ws: Workspace) -
 	assert scenarios_mod.parse(ws.scenarios_dir / 'auth' / 'login.md', ws.scenarios_dir).runnable() == 'ok'
 
 
+def test_approving_several_scenarios_is_one_decision(client: TestClient, ws: Workspace) -> None:
+	"""The chat's "Approve all": every body in one prompt, one yes approves each."""
+	scenarios_mod.save(
+		scenarios_mod.Scenario(
+			id='auth/logout',
+			path=ws.scenarios_dir / 'auth' / 'logout.md',
+			title='Logout works',
+			steps=[scenarios_mod.Step('Click Log out.', 'the login page shows')],
+		)
+	)
+	asks: list[dict[str, Any]] = []
+	with client.websocket_connect(f'/session?token={TOKEN}') as socket:
+		socket.send_json({'type': 'command', 'id': 'c1', 'name': 'approve', 'args': {'id': 'auth/login auth/logout'}})
+		while True:
+			frame = socket.receive_json()
+			if frame['type'] == 'ask':
+				asks.append(frame)
+				socket.send_json({'type': 'answer', 'id': frame['id'], 'value': 'y'})
+			if frame['type'] == 'result':
+				assert frame['code'] == 0
+				break
+	assert len(asks) == 1 and 'Login works' in asks[0]['body'] and 'Logout works' in asks[0]['body']
+	states = {s.id: s.runnable() for s in scenarios_mod.load_all(ws.scenarios_dir)}
+	assert states == {'auth/login': 'ok', 'auth/logout': 'ok'}
+
+
+def test_a_scenario_comes_with_its_steps_parsed(client: TestClient) -> None:
+	body = get(client, '/scenarios/auth/login').json()
+	assert body['steps'] == [{'action': 'Open the login page.', 'expect': 'the form shows'}]
+
+
 def test_declining_an_ask_leaves_the_scenario_a_draft(client: TestClient, ws: Workspace) -> None:
 	with client.websocket_connect(f'/session?token={TOKEN}') as socket:
 		socket.send_json({'type': 'command', 'id': 'c1', 'name': 'approve', 'args': {'id': 'auth/login'}})
@@ -703,6 +734,11 @@ def test_say_is_a_claude_turn(
 	assert prompt_file.read_text() == '-plan the login flow'  # stdin, so a leading '-' is not a flag
 	args = args_file.read_text().splitlines()
 	assert args[args.index('--session-id') + 1] == chat_id and '--strict-mcp-config' in args
+	# The role goes in on every turn, and approving from chat text is not possible.
+	assert args[args.index('--append-system-prompt') + 1] == '# Your role'  # the brief, one line per arg here
+	assert 'You are the QA engineer' in args_file.read_text()
+	assert 'mcp__nkqa__approve_scenario' in args[args.index('--disallowedTools') + 1]
+	assert args[args.index('--setting-sources') + 1] == 'project,local'
 	assert '/mcp' in args[args.index('--mcp-config') + 1] and TOKEN in args[args.index('--mcp-config') + 1]
 	assert claude.read_titles(ws.chat_titles_file) == {chat_id: 'Login flow planning'}
 

@@ -33,7 +33,7 @@ from starlette.types import Send as AsgiSend
 
 from nkqa import chats as chats_mod
 from nkqa import config as config_mod
-from nkqa import mcp_server
+from nkqa import mcp_server, prompts
 from nkqa import scenarios as scenarios_mod
 from nkqa.execution.evidence import recorded_runs, recording_file, step_count
 from nkqa.execution.report import last_verdict, latest_run_dir, read_results
@@ -249,7 +249,13 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 		s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 		if s is None:
 			raise HTTPException(status_code=404, detail=f'no scenario "{scenario_id}"')
-		return {**scenario_view(ws, s), 'body': s.path.read_text(encoding='utf-8')}
+		return {
+			**scenario_view(ws, s),
+			'body': s.path.read_text(encoding='utf-8'),
+			# Parsed here so a chat card never has to re-implement the scenario format.
+			'preconditions': s.preconditions,
+			'steps': [{'action': st.action, 'expect': st.expect} for st in s.steps],
+		}
 
 	@app.get('/runs/{name}', dependencies=guard)
 	def one_run(name: str) -> dict[str, Any]:
@@ -277,6 +283,12 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 				f'/artifacts/runs/{name}/conversation/{p.name}' for p in _ordered(run_dir / 'conversation', '*.txt')
 			],
 		}
+
+	@app.get('/library', dependencies=guard)
+	def library_tests() -> dict[str, Any]:
+		from nkqa import library
+
+		return {'tests': library.entries(ws)}
 
 	@app.get('/chats', dependencies=guard)
 	def all_chats() -> dict[str, Any]:
@@ -393,7 +405,11 @@ class ClaudeTurn:
 			await self.send({'type': 'chat', 'id': chat_id, 'title': ''})
 
 		async def work() -> int:
-			code = await claude.turn(self.ws.root, text, chat_id, self.mcp_url, auth.current(), self.send, job_id)
+			cfg = config_mod.load(self.ws.config_file)
+			brief = prompts.desktop_brief(cfg.app_name, cfg.base_url)
+			code = await claude.turn(
+				self.ws.root, text, chat_id, self.mcp_url, auth.current(), self.send, job_id, brief
+			)
 			if new and code == 0:
 				# After the result, not before it: a title is not worth holding up the reply.
 				task = asyncio.create_task(self.name(chat_id, text))

@@ -73,6 +73,10 @@ class Workspace:
 		self.local_dir = self.root / '.nkqa'  # gitignored: machine-local, never shared
 		self.chat_titles_file = self.local_dir / 'chat-titles.json'  # desktop chats Claude named
 
+	def recording_file(self, scenario_id: str) -> Path:
+		"""A library test's recording, next to its scenario and committed with it."""
+		return self.scenarios_dir / f'{scenario_id}.recording.json'
+
 	def run_dir(self, name: str) -> Path:
 		return self.runs_dir / slugify(name)
 

@@ -1,7 +1,16 @@
 /** HTTP reads. The socket carries everything that happens; this is state you can fetch. */
 
 import { httpBase } from './connection'
-import type { ChatDetail, ChatSummary, Connection, Health, RunDetail, ScenarioDetail, WorkspaceState } from './types'
+import type {
+	ChatDetail,
+	ChatSummary,
+	Connection,
+	Health,
+	LibraryTest,
+	RunDetail,
+	ScenarioDetail,
+	WorkspaceState,
+} from './types'
 
 async function get<T>(c: Connection, path: string): Promise<T> {
 	const response = await fetch(`${httpBase(c)}${path}`, {
@@ -18,6 +27,7 @@ export const health = (c: Connection, recheck = false) => get<Health>(c, `/healt
 export const workspace = (c: Connection) => get<WorkspaceState>(c, '/workspace')
 export const scenario = (c: Connection, id: string) => get<ScenarioDetail>(c, `/scenarios/${id}`)
 export const run = (c: Connection, name: string) => get<RunDetail>(c, `/runs/${encodeURIComponent(name)}`)
+export const library = (c: Connection) => get<{ tests: LibraryTest[] }>(c, '/library')
 export const chats = (c: Connection) => get<{ chats: ChatSummary[] }>(c, '/chats')
 export const chat = (c: Connection, id: string) => get<ChatDetail>(c, `/chats/${encodeURIComponent(id)}`)
 

@@ -81,6 +81,7 @@ A loopback port is reachable by every browser tab on the machine.
 | `GET /runs/{name}` | `steps` (a count), `result` (the parsed `results.json`, or null), `artifacts` (`report`/`gif`/`history` → artifact URLs), `videos`, `shots` (per-step screenshots) and `conversation` (the LLM transcript) — all artifact URLs, in step order. |
 | `GET /chats` | `chats`: id, title, updated, turn count — newest first. These are **Claude Code's own sessions** for the workspace folder (`~/.claude/projects/<cwd, non-alphanumerics → '-'>/*.jsonl`), terminal ones included. Title: one set with `/rename`, else Claude's `ai-title`, else the one the desktop asked Claude for (`.nkqa/chat-titles.json` — `claude -p` writes none itself), else the first message. |
 | `GET /chats/{id}` | `id`, `title`, `messages`: the user/assistant messages from the session file, in the same shape `claude -p --output-format stream-json` emits, so one renderer draws both. `404` if unknown or not a session id. |
+| `GET /library` | `tests`: the Library — scenarios whose recording is valid for their current approval. Each: `id`, `title`, `folder` (the id's path), `steps` (recorded), `saved_at`, `recorded_from` (the Claude run), `last_run`, `last_verdict`. |
 | `POST /claude/login` | Starts `claude auth login`, which opens the browser sign-in. Returns at once; re-check `/health`. |
 | `POST /open/{install\|upgrade}` | Opens one of two fixed pages in the system browser. Nothing else is accepted. |
 | `/mcp` | nkqa's MCP tools over streamable HTTP, for the `claude` processes chat spawns. Bearer token required, like everything else. |
@@ -176,6 +177,14 @@ The MCP tools share this window's HumanInTheLoop and ask through it, so a permis
 credential Claude asks for arrives as an ordinary `ask` frame, and the browser Claude drives
 streams `frame`s. Closing the window ends that session: grants, typed credentials and the
 autonomy mode are forgotten.
+
+**The Library** is three commands. `library-save {run}` is `human_only`: it keeps a passing
+Claude run as a Library test only if every scenario step with an EXPECT has a passing `check`,
+the scenario still carries the approval the run was made under, and one immediate replay passes;
+otherwise it logs `Not saved: <why>` and exits `1`. `library-replay {target}` replays a test id, a
+folder, or (empty) the whole Library with no model — it streams `step` events carrying a
+`screenshot` artifact path and `frame`s like any run, and exits `0`/`1`/`2`. `library` lists it.
+`approve` takes several ids separated by spaces as one decision: one `ask` with every body.
 
 `args` values may be strings, numbers or booleans; the server coerces them to each
 parameter's declared type and silently drops names the command doesn't have.

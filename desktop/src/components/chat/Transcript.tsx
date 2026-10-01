@@ -13,6 +13,7 @@ import {
 	Check,
 	ChevronRight,
 	CircleAlert,
+	CircleCheck,
 	Clock,
 	Compass,
 	Eye,
@@ -39,9 +40,12 @@ import {
 	X,
 	type LucideIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import * as api from '../../api/client'
 import type {
 	ClaudeMessage,
+	Connection,
+	ScenarioDetail,
 	ImageBlock,
 	ScenarioSummary,
 	TextBlock,
@@ -119,6 +123,10 @@ const TOOLS: Record<string, [LucideIcon, (i: Record<string, unknown>) => string]
 	switch_tab: [PanelTop, () => 'Switched tab'],
 	close_tab: [PanelTop, () => 'Closed a tab'],
 	wait: [Clock, (i) => `Waited ${str(i.seconds)}s`],
+	check: [
+		CircleCheck,
+		(i) => `Checked step ${str(i.step)}: ${str(i.kind).replace('_', ' ')}${str(i.value) ? ` “${str(i.value)}”` : ''}`,
+	],
 	request_permission: [ShieldAlert, (i) => `Asked permission — ${str(i.description) || str(i.key)}`],
 	ask_credential: [KeyRound, (i) => `Asked you for “${str(i.name)}”`],
 	finish_explore: [Flag, () => 'Finished exploring'],
@@ -189,7 +197,6 @@ interface Draft {
 	area?: string
 	slug?: string
 	title?: string
-	preconditions?: string[]
 	steps?: { action?: string; expect?: string }[]
 }
 
@@ -200,52 +207,84 @@ const slugify = (s: string) =>
 		.replace(/^-|-$/g, '')
 
 const STATE_LABEL: Record<string, string> = { ok: 'approved', draft: 'draft', stale: 'stale', deprecated: 'deprecated' }
+const WRITE = `${NKQA}write_scenario`
+const READ = `${NKQA}read_scenario`
 
+/** The scenario a tool call is about, if it produced or showed one. */
+function scenarioOf(item: Item): string {
+	if (item.kind !== 'tool' || !item.result || item.result.is_error) return ''
+	const { text } = resultParts(item.result)
+	if (item.use.name === READ) return str(item.use.input.id)
+	if (item.use.name !== WRITE) return ''
+	const written = /Wrote draft (\S+) \(/.exec(text)?.[1]
+	if (written) return written
+	const draft = (item.use.input.draft ?? {}) as Draft
+	return /already exists/.test(text) ? `${slugify(draft.area ?? '')}/${slugify(draft.slug ?? '')}` : ''
+}
+
+/** A scenario as it is on disk now - the card is never a stale copy of what Claude sent. */
 export function ScenarioCard({
-	use,
-	result,
-	live,
+	connection,
+	id,
+	draft,
+	pending,
 	scenarios,
 	busy,
 	canRun,
 	onApprove,
 	onRun,
 	onOpen,
+	inLibrary,
 }: {
-	use: ToolUseBlock
-	result: ToolResultBlock | undefined
-	live: boolean
+	connection: Connection
+	id: string
+	draft: Draft | undefined
+	pending: boolean
 	scenarios: ScenarioSummary[]
 	busy: boolean
 	canRun: boolean
-	onApprove: (id: string) => void
-	onRun: (id: string) => void
+	onApprove: (ids: string) => void
+	onRun: (ids: string[]) => void
 	onOpen: (id: string) => void
+	inLibrary: boolean
 }) {
-	const draft = (use.input.draft ?? {}) as Draft
-	const { text } = resultParts(result)
-	const id = /Wrote draft (\S+) \(/.exec(text)?.[1] ?? `${slugify(draft.area ?? '')}/${slugify(draft.slug ?? '')}`
-	const written = !!result && !result.is_error && text.startsWith('Wrote draft')
+	const [detail, setDetail] = useState<ScenarioDetail | null>(null)
 	const current = scenarios.find((s) => s.id === id)
-	const state = current?.state ?? (written ? 'draft' : '')
+
+	// Refetched when the workspace list changes: approving, editing or running shows up here.
+	useEffect(() => {
+		if (!id) return
+		let live = true
+		api
+			.scenario(connection, id)
+			.then((d) => live && setDetail(d))
+			.catch(() => live && setDetail(null))
+		return () => {
+			live = false
+		}
+	}, [connection, id, current?.state, current?.last_run])
+
+	const state = current?.state ?? detail?.state ?? ''
+	const steps = detail?.steps ?? draft?.steps?.map((s) => ({ action: s.action ?? '', expect: s.expect ?? '' })) ?? []
 
 	return (
 		<div className="card">
 			<div className="card-head">
 				<FileText size={16} />
 				<div className="card-title">
-					<strong>{current?.title ?? draft.title ?? id}</strong>
-					<span className="row-sub">{id}</span>
+					<strong>{current?.title ?? detail?.title ?? draft?.title ?? id}</strong>
+					<span className="row-sub">{id || 'writing…'}</span>
 				</div>
+				{current?.last_verdict && (
+					<span className={`verdict verdict-${current.last_verdict.toLowerCase()}`}>{current.last_verdict}</span>
+				)}
 				{state && <span className={`chip chip-${state}`}>{STATE_LABEL[state] ?? state}</span>}
-				{!result && live && <LoaderCircle size={14} className="spin" />}
+				{pending && <LoaderCircle size={14} className="spin" />}
 			</div>
 
-			{(draft.preconditions?.length ?? 0) > 0 && (
-				<p className="card-note">Before: {draft.preconditions!.join(' · ')}</p>
-			)}
+			{(detail?.preconditions.length ?? 0) > 0 && <p className="card-note">Before: {detail!.preconditions.join(' · ')}</p>}
 			<ol className="card-steps">
-				{(draft.steps ?? []).map((s, i) => (
+				{steps.map((s, i) => (
 					<li key={i}>
 						{s.action}
 						{s.expect && <span className="card-expect"> → {s.expect}</span>}
@@ -253,11 +292,10 @@ export function ScenarioCard({
 				))}
 			</ol>
 
-			{result && !written && <p className="card-note bad">{text}</p>}
-			{written && (
+			{id && !pending && (
 				<div className="card-actions">
 					<button
-						className="primary"
+						className={state === 'ok' ? '' : 'primary'}
 						disabled={busy || state === 'ok'}
 						title={busy ? 'Wait for the current job to finish' : 'Read it in full, then confirm'}
 						onClick={() => onApprove(id)}
@@ -265,17 +303,59 @@ export function ScenarioCard({
 						<ShieldCheck size={14} /> {state === 'ok' ? 'Approved' : 'Review & approve'}
 					</button>
 					<button
+						className={state === 'ok' ? 'primary' : ''}
 						disabled={busy || state !== 'ok' || !canRun}
 						title={state === 'ok' ? 'Claude runs it in a real browser' : 'Only an approved scenario can run'}
-						onClick={() => onRun(id)}
+						onClick={() => onRun([id])}
 					>
 						<Play size={14} /> Run
 					</button>
-					<button onClick={() => onOpen(id)}>
-						<FolderOpen size={14} /> Open
-					</button>
+					{inLibrary && (
+						<button onClick={() => onOpen(id)}>
+							<FolderOpen size={14} /> Open in library
+						</button>
+					)}
 				</div>
 			)}
+		</div>
+	)
+}
+
+/** Under a plan: act on all of it at once. Approving is still one human decision, in the modal. */
+function PlanBar({
+	ids,
+	scenarios,
+	busy,
+	canRun,
+	onApprove,
+	onRun,
+}: {
+	ids: string[]
+	scenarios: ScenarioSummary[]
+	busy: boolean
+	canRun: boolean
+	onApprove: (ids: string) => void
+	onRun: (ids: string[]) => void
+}) {
+	const state = (id: string) => scenarios.find((s) => s.id === id)?.state ?? 'draft'
+	const unapproved = ids.filter((id) => state(id) !== 'ok' && state(id) !== 'deprecated')
+	const approved = ids.filter((id) => state(id) === 'ok')
+	return (
+		<div className="plan-bar">
+			<ListChecks size={16} />
+			<span className="plan-bar-label">
+				{ids.length} scenarios · {approved.length} approved
+			</span>
+			<button
+				className={unapproved.length ? 'primary' : ''}
+				disabled={busy || !unapproved.length}
+				onClick={() => onApprove(unapproved.join(' '))}
+			>
+				<ShieldCheck size={14} /> Approve all{unapproved.length ? ` (${unapproved.length})` : ''}…
+			</button>
+			<button disabled={busy || !approved.length || !canRun} onClick={() => onRun(approved)}>
+				<Play size={14} /> Run approved{approved.length ? ` (${approved.length})` : ''}
+			</button>
 		</div>
 	)
 }
@@ -284,22 +364,46 @@ export function ScenarioCard({
 
 const VERDICT_ICON = { pass: Check, fail: X, blocked: CircleAlert } as const
 
+/** Where a passing run stands with the Library. */
+export type SaveState =
+	| { kind: 'idle' }
+	| { kind: 'saving' }
+	| { kind: 'saved' }
+	| { kind: 'other' } // in the Library already, recorded from an earlier run
+	| { kind: 'failed'; reason: string }
+
 export function VerdictCard({
 	use,
 	result,
 	live,
-	onOpen,
+	busy,
+	save,
+	onSave,
+	onRerun,
+	onOpenRun,
+	onOpenLibrary,
 }: {
 	use: ToolUseBlock
 	result: ToolResultBlock | undefined
 	live: boolean
-	onOpen: (scenarioId: string) => void
+	busy: boolean
+	save: (run: string, scenarioId: string) => SaveState
+	onSave: (run: string) => void
+	onRerun: (scenarioId: string) => void
+	onOpenRun: (run: string) => void
+	onOpenLibrary: (scenarioId: string) => void
 }) {
 	const steps = (use.input.steps ?? []) as { step?: number; verdict?: 'pass' | 'fail' | 'blocked'; note?: string }[]
 	const summary = str(use.input.summary)
 	const { text } = resultParts(result)
 	const head = /(\S+): (PASS|FAIL|BLOCKED)/.exec(text)
 	const verdict = head?.[2]?.toLowerCase() ?? ''
+	const scenarioId = head?.[1] ?? ''
+	const run = /runs\/([^/\s]+)\/results\.md/.exec(text)?.[1] ?? ''
+	const state = run && verdict === 'pass' ? save(run, scenarioId) : null
+	// Only a replay that did not come out clean is worth retrying as-is; every other refusal is
+	// about the run itself (no checks, edited since), and only a fresh run can fix that.
+	const retryable = state?.kind === 'failed' && state.reason.includes('did not replay')
 
 	return (
 		<div className={`card card-verdict ${verdict ? `card-${verdict}` : ''}`}>
@@ -326,20 +430,54 @@ export function VerdictCard({
 				})}
 			</ul>
 			{result?.is_error && <p className="card-note bad">{text}</p>}
+			{state?.kind === 'failed' && <p className="card-note bad">{state.reason}</p>}
 			{head && (
 				<div className="card-actions">
-					<button onClick={() => onOpen(head[1] ?? '')}>
-						<Eye size={14} /> Evidence
-					</button>
+					{state?.kind === 'saved' ? (
+						<button onClick={() => onOpenLibrary(scenarioId)}>
+							<span className="card-saved">
+								<Check size={14} /> In library
+							</span>
+						</button>
+					) : state?.kind === 'failed' && !retryable ? (
+						<button className="primary" disabled={busy} onClick={() => onRerun(scenarioId)}>
+							<Play size={14} /> Run again
+						</button>
+					) : (
+						state && (
+							<button
+								className="primary"
+								disabled={busy || state.kind === 'saving'}
+								title="Replays it once without a model; kept only if that passes too"
+								onClick={() => onSave(run)}
+							>
+								{state.kind === 'saving' ? <LoaderCircle size={14} className="spin" /> : <BookMarked size={14} />}
+								{state.kind === 'saving'
+									? 'Replaying once…'
+									: state.kind === 'other'
+										? 'Replace library copy'
+										: state.kind === 'failed'
+											? 'Try saving again'
+											: 'Save to library'}
+							</button>
+						)
+					)}
+					{run && (
+						<button onClick={() => onOpenRun(run)}>
+							<Eye size={14} /> Evidence
+						</button>
+					)}
 				</div>
 			)}
 		</div>
 	)
 }
 
+
 // --- the transcript ------------------------------------------------------------------
 
 export function Transcript({
+	connection,
 	items,
 	live,
 	scenarios,
@@ -348,52 +486,112 @@ export function Transcript({
 	onApprove,
 	onRun,
 	onOpen,
+	save,
+	onSave,
+	onOpenRun,
+	library,
 }: {
+	connection: Connection
 	items: Item[]
 	live: boolean
 	scenarios: ScenarioSummary[]
 	busy: boolean
 	canRun: boolean
-	onApprove: (id: string) => void
-	onRun: (id: string) => void
+	onApprove: (ids: string) => void
+	onRun: (ids: string[]) => void
 	onOpen: (id: string) => void
+	save: (run: string, scenarioId: string) => SaveState
+	onSave: (run: string) => void
+	onOpenRun: (run: string) => void
+	library: Set<string>
 }) {
-	return (
-		<>
-			{items.map((item, i) => {
-				if (item.kind === 'user') return <div key={i} className="msg-user">{item.text}</div>
-				if (item.kind === 'text')
-					return (
-						<div key={i} className="msg-assistant">
-							<Markdown source={item.text} />
-						</div>
-					)
-				if (item.kind === 'error')
-					return (
-						<div key={i} className="msg-error">
-							<CircleAlert size={14} /> {item.text}
-						</div>
-					)
-				const name = item.use.name
-				if (name === `${NKQA}write_scenario`)
-					return (
-						<ScenarioCard
-							key={i}
-							use={item.use}
-							result={item.result}
-							live={live}
-							scenarios={scenarios}
-							busy={busy}
-							canRun={canRun}
-							onApprove={onApprove}
-							onRun={onRun}
-							onOpen={onOpen}
-						/>
-					)
-				if (name === `${NKQA}finish_run`)
-					return <VerdictCard key={i} use={item.use} result={item.result} live={live} onOpen={onOpen} />
-				return <ToolRow key={i} use={item.use} result={item.result} live={live} />
-			})}
-		</>
-	)
+	const out: ReactNode[] = []
+	// Scenarios each reply produced, for the bar under it. A reply ends where the human speaks.
+	let segment: string[] = []
+	const flush = (key: string) => {
+		const ids = [...new Set(segment)]
+		if (ids.length > 1)
+			out.push(
+				<PlanBar
+					key={key}
+					ids={ids}
+					scenarios={scenarios}
+					busy={busy}
+					canRun={canRun}
+					onApprove={onApprove}
+					onRun={onRun}
+				/>,
+			)
+		segment = []
+	}
+
+	items.forEach((item, i) => {
+		if (item.kind === 'user') {
+			flush(`bar-${i}`)
+			out.push(
+				<div key={i} className="msg-user">
+					{item.text}
+				</div>,
+			)
+			return
+		}
+		if (item.kind === 'text') {
+			out.push(
+				<div key={i} className="msg-assistant">
+					<Markdown source={item.text} />
+				</div>,
+			)
+			return
+		}
+		if (item.kind === 'error') {
+			out.push(
+				<div key={i} className="msg-error">
+					<CircleAlert size={14} /> {item.text}
+				</div>,
+			)
+			return
+		}
+		const name = item.use.name
+		const id = scenarioOf(item)
+		if (name === WRITE || (name === READ && id)) {
+			if (id) segment.push(id)
+			out.push(
+				<ScenarioCard
+					key={i}
+					connection={connection}
+					id={id}
+					draft={name === WRITE ? ((item.use.input.draft ?? {}) as Draft) : undefined}
+					pending={!item.result && live}
+					scenarios={scenarios}
+					busy={busy}
+					canRun={canRun}
+					onApprove={onApprove}
+					onRun={onRun}
+					onOpen={onOpen}
+					inLibrary={library.has(id)}
+				/>,
+			)
+			return
+		}
+		if (name === `${NKQA}finish_run`) {
+			out.push(
+				<VerdictCard
+					key={i}
+					use={item.use}
+					result={item.result}
+					live={live}
+					busy={busy}
+					save={save}
+					onSave={onSave}
+					onRerun={(id) => onRun([id])}
+					onOpenRun={onOpenRun}
+					onOpenLibrary={onOpen}
+				/>,
+			)
+			return
+		}
+		out.push(<ToolRow key={i} use={item.use} result={item.result} live={live} />)
+	})
+	flush('bar-end')
+	return <>{out}</>
 }
