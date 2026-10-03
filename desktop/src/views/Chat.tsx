@@ -6,7 +6,7 @@
  * at a time, so nothing is ever on screen twice.
  */
 
-import { MessageSquare, SquarePen } from 'lucide-react'
+import { FileSpreadsheet, MessageSquare, SquarePen } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as api from '../api/client'
 import type { Job } from '../api/socket'
@@ -76,6 +76,9 @@ export function Chat({
 	const [history, setHistory] = useState<ChatDetail | null>(null)
 	const [absorbed, setAbsorbed] = useState<Set<string>>(new Set())
 	const log = useRef<HTMLDivElement>(null)
+	// A file dropped anywhere on the chat goes to the composer to upload.
+	const [dropped, setDropped] = useState<File | null>(null)
+	const [dragging, setDragging] = useState(false)
 	const stick = useRef(true)
 
 	const finished = jobs.filter((j) => j.done).length
@@ -170,7 +173,30 @@ export function Chat({
 				{list.length === 0 && <p className="empty">No conversations yet.</p>}
 			</div>
 
-			<div className="detail chat">
+			<div
+				className="detail chat"
+				onDragOver={(e) => {
+					if (!e.dataTransfer.types.includes('Files')) return
+					e.preventDefault()
+					setDragging(true)
+				}}
+				onDragLeave={(e) => {
+					if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+				}}
+				onDrop={(e) => {
+					e.preventDefault()
+					setDragging(false)
+					const file = e.dataTransfer.files[0]
+					if (file && canRun) setDropped(file)
+				}}
+			>
+				{dragging && (
+					<div className="drop-overlay">
+						<FileSpreadsheet size={28} />
+						<strong>Drop to attach test cases</strong>
+						<span className="row-sub">.xlsx, .csv or .tsv — Claude imports them as scenarios</span>
+					</div>
+				)}
 				<header className="chat-head">
 					<MessageSquare size={16} />
 					<h2 className="row-clip">{title}</h2>
@@ -231,6 +257,9 @@ export function Chat({
 
 				<div className="chat-column">
 					<Composer
+						connection={connection}
+						incoming={dropped}
+						onTaken={() => setDropped(null)}
 						onSend={onSay}
 						onStop={() => mine && onStop(mine.id)}
 						running={thinking}

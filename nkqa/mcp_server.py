@@ -97,6 +97,10 @@ class Session:
 		# A window that can show the browser. The desktop sidecar sets it; stdio has none.
 		self.live = live
 		self._cast: asyncio.Task[None] | None = None
+		# Drafts per turn, so a 300-row import arrives as batches a human can review. 0 = no limit
+		# (`qa mcp`); the desktop sets one and resets the count at the start of every turn.
+		self.draft_limit = 0
+		self.drafted = 0
 		self.ws: Workspace | None = None
 		self.config = Config()
 		self.hitl: HumanInTheLoop | None = None
@@ -311,8 +315,14 @@ def build_server(session: Session) -> FastMCP:
 		call approve_scenario only for the ones they say to. Existing files are kept unless
 		force=true. Keep each scenario one journey, 3-8 steps, each with an expectation."""
 		ws = session.require_ws()
+		if session.draft_limit and session.drafted >= session.draft_limit:
+			raise ValueError(
+				f'That is {session.draft_limit} drafts this turn - the batch limit. Stop drafting: tell the human '
+				'how many are drafted so far and how many are left, and that saying "next" continues.'
+			)
 		written, skipped = write_drafts(ws, [draft], force, ticket)
 		if written:
+			session.drafted += 1
 			s = written[0]
 			return (
 				f'Wrote draft {s.id} ({s.path}).\n'

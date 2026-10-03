@@ -195,6 +195,20 @@ def _spoken(rec: dict[str, Any]) -> bool:
 	return not (rec.get('type') == 'user' and _user_text(rec).lstrip().startswith('<'))
 
 
+ATTACHED = re.compile(r'^\[Attached: (\S+)[^\]]*\]\s*')
+
+
+def readable(message: str) -> str:
+	"""A message as a person would name it: an attached sheet is "Import cases.xlsx", not the
+	[Attached: ...] note in front of it that tells Claude where the CSV is."""
+	match = ATTACHED.match(message)
+	if not match:
+		return message
+	name = Path(match.group(1)).name
+	rest = message[match.end() :].strip()
+	return f'Import {name}' if not rest or rest == 'Import these test cases.' else f'{rest} ({name})'
+
+
 def list_sessions(root: Path, titles: dict[str, str] | None = None) -> list[dict[str, Any]]:
 	"""Newest first. Title: one the human set, else Claude's own, else the one the desktop asked
 	Claude for (`claude -p` writes none itself), else the first thing said."""
@@ -215,7 +229,7 @@ def list_sessions(root: Path, titles: dict[str, str] | None = None) -> list[dict
 				ai = str(rec.get('aiTitle') or ai)
 			elif _spoken(rec) and _user_text(rec).strip():
 				turns += 1
-				first = first or _user_text(rec).strip()
+				first = first or readable(_user_text(rec).strip())
 		if not turns:
 			continue  # tool results only, or a turn that died before it said anything
 		updated = path.stat().st_mtime

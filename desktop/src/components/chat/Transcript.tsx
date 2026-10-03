@@ -18,6 +18,7 @@ import {
 	Compass,
 	Eye,
 	FileSearch,
+	FileSpreadsheet,
 	FileText,
 	Flag,
 	FolderOpen,
@@ -109,6 +110,7 @@ const TOOLS: Record<string, [LucideIcon, (i: Record<string, unknown>) => string]
 	update_appmap: [BookMarked, (i) => `Updated the app map${str(i.message) ? ` — ${str(i.message)}` : ''}`],
 	list_scenarios: [ListChecks, () => 'Listed scenarios'],
 	read_scenario: [FileText, (i) => `Read ${str(i.id)}`],
+	write_scenario: [FileText, (i) => `Draft “${str((i.draft as Record<string, unknown> | undefined)?.title)}”`],
 	approve_scenario: [ShieldCheck, (i) => `Asked you to approve ${str(i.id)}`],
 	start_run: [Play, (i) => `Started a run of ${str(i.scenario_id)}`],
 	start_explore: [Compass, (i) => `Started exploring${str(i.url) ? ` ${str(i.url)}` : ''}`],
@@ -474,6 +476,25 @@ export function VerdictCard({
 }
 
 
+/** What the human said - with an attached sheet shown as a file, not as the note Claude reads. */
+function UserMessage({ text }: { text: string }) {
+	const attached = /^\[Attached: ([^\s\]]+)(.*)\]\n*/.exec(text)
+	if (!attached) return <div className="msg-user">{text}</div>
+	const name = attached[1]?.split('/').pop() ?? ''
+	const rows = [...(attached[2] ?? '').matchAll(/(\d+) rows/g)].reduce((n, m) => n + Number(m[1]), 0)
+	const rest = text.slice(attached[0].length).trim()
+	return (
+		<div className="msg-user">
+			<div className="attach-chip attach-sent">
+				<FileSpreadsheet size={14} />
+				<span className="attach-name">{name}</span>
+				{rows > 0 && <span className="row-sub">{rows} rows</span>}
+			</div>
+			{rest}
+		</div>
+	)
+}
+
 // --- the transcript ------------------------------------------------------------------
 
 export function Transcript({
@@ -528,11 +549,7 @@ export function Transcript({
 	items.forEach((item, i) => {
 		if (item.kind === 'user') {
 			flush(`bar-${i}`)
-			out.push(
-				<div key={i} className="msg-user">
-					{item.text}
-				</div>,
-			)
+			out.push(<UserMessage key={i} text={item.text} />)
 			return
 		}
 		if (item.kind === 'text') {
@@ -553,7 +570,8 @@ export function Transcript({
 		}
 		const name = item.use.name
 		const id = scenarioOf(item)
-		if (name === WRITE || (name === READ && id)) {
+		// A refused draft (the batch limit, a bad area) is a tool row with its reason, not an empty card.
+		if ((name === WRITE && !item.result?.is_error) || (name === READ && id)) {
 			if (id) segment.push(id)
 			out.push(
 				<ScenarioCard

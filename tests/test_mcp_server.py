@@ -194,6 +194,28 @@ def test_no_workspace_is_a_readable_refusal(tmp_path: Path) -> None:
 	drive(session, scenario)
 
 
+def test_drafts_come_in_batches_when_a_limit_is_set(tmp_path: Path) -> None:
+	"""The desktop caps drafts per turn so a 300-row import arrives in batches a human can review."""
+	session, _ = make(tmp_path, [])
+	session.draft_limit = 2
+
+	async def scenario(call: Call, client: ClientSession) -> None:
+		def draft(n: int) -> dict[str, Any]:
+			return {'area': 'smoke', 'slug': f'case-{n}', 'title': f'Case {n}', 'steps': [{'action': 'Open.'}]}
+
+		for n in (1, 2):
+			text, err = await call('write_scenario', {'draft': draft(n)})
+			assert not err
+		text, err = await call('write_scenario', {'draft': draft(3)})
+		assert err and 'batch limit' in text and 'next' in text
+		assert not (session.require_ws().scenarios_dir / 'smoke' / 'case-3.md').exists()
+		session.drafted = 0  # what the desktop does when the next message arrives
+		text, err = await call('write_scenario', {'draft': draft(3)})
+		assert not err
+
+	drive(session, scenario)
+
+
 def test_write_then_approve_goes_through_the_human(tmp_path: Path) -> None:
 	session, dialogs = make(tmp_path, ['', 'y'])  # first Cancel, then Confirm
 

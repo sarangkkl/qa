@@ -814,6 +814,15 @@ def test_a_custom_title_beats_claudes_and_the_first_message_is_the_fallback(tmp_
 	assert titles == {a: 'mine', b: 'x' * 60}
 
 
+def test_an_attached_sheet_is_named_like_a_person_would() -> None:
+	from nkqa.server.claude import readable
+
+	note = '[Attached: imports/regression.xlsx — sheet "Cases": imports/regression--cases.csv, 3 rows; columns: ID]'
+	assert readable(f'{note}\n\nImport these test cases.') == 'Import regression.xlsx'
+	assert readable(f'{note}\n\nonly the Projects sheet') == 'only the Projects sheet (regression.xlsx)'
+	assert readable('plan the login flow') == 'plan the login flow'
+
+
 def test_project_dir_matches_claude_codes_naming() -> None:
 	from nkqa.server import claude
 
@@ -866,6 +875,18 @@ def test_mcp_needs_the_token(client: TestClient) -> None:
 	assert ok.status_code != 401
 	evil = {'Authorization': f'Bearer {TOKEN}', 'Origin': 'https://evil.test', **accept}
 	assert client.post('/mcp', json=body, headers=evil).status_code == 401
+
+
+def test_a_sheet_uploads_into_imports(client: TestClient, ws: Workspace) -> None:
+	assert client.post('/imports?name=cases.csv', content=b'ID,Title\nC1,Login\n').status_code == 401
+	headers = {'Authorization': f'Bearer {TOKEN}'}
+	body = client.post('/imports?name=cases.csv', content=b'ID,Title\nC1,Login\n', headers=headers).json()
+	assert body['path'] == 'imports/cases.csv' and (ws.root / body['path']).is_file()
+	assert body['sheets'][0]['rows'] == 1 and body['note'].startswith('[Attached: imports/cases.csv')
+	bad = client.post('/imports?name=cases.docx', content=b'x', headers=headers)
+	assert bad.status_code == 400 and 'Attach an .xlsx' in bad.json()['detail']
+	broken = client.post('/imports?name=cases.xlsx', content=b'not a zip', headers=headers)
+	assert broken.status_code == 400 and not (ws.imports_dir / 'cases.xlsx').exists()
 
 
 def test_the_relay_denies_when_no_window_is_open() -> None:

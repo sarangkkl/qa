@@ -44,6 +44,14 @@ for each EXPECT: text on the page, the URL, the title, an element or its text. A
 marked `pass` without one. Names of things a test creates carry `{{unique}}` (e.g.
 `QA project {{unique}}`), which becomes a fresh stamp on every run, so reruns never collide.
 
+**Test cases you already have can be imported.** In the desktop chat, attach an Excel or CSV
+export (📎, or drop it on the chat). Claude shows how it reads the columns, asks about anything
+unclear, and drafts the rows as scenario cards, 20 per turn; say *next* for the following batch.
+Each draft keeps the original test case id, type and priority as tags, and the Module column
+becomes its folder (`Projects/Creation` → `projects/creation`). The sheet itself stays in
+`imports/`. Importing again is safe: ids that exist are skipped. Old `.xls` files need saving as
+`.xlsx` or CSV first.
+
 **The Library is the regression suite.** A run that passed can be **saved to the Library**, which
 is a human's call. It is kept only if its recording also replays once by itself. From then on it
 **replays with no model**: every recorded step is repeated, each element found again by its

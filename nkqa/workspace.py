@@ -69,6 +69,7 @@ class Workspace:
 		self.scenarios_dir = self.root / 'scenarios'
 		self.runs_dir = self.root / 'runs'
 		self.chats_dir = self.root / 'chats'  # committed: the reasoning behind a scenario is reviewable
+		self.imports_dir = self.root / 'imports'  # committed: the sheets scenarios were imported from
 		self.permissions_file = self.root / 'qa_permissions.json'
 		self.local_dir = self.root / '.nkqa'  # gitignored: machine-local, never shared
 		self.chat_titles_file = self.local_dir / 'chat-titles.json'  # desktop chats Claude named

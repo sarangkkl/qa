@@ -23,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
@@ -45,6 +45,7 @@ from nkqa.shell.commands import REGISTRY, ShellContext, parse_slash
 from nkqa.vault import Vault
 from nkqa.workspace import Workspace
 
+DRAFT_BATCH = 20  # drafts per chat turn: an imported sheet arrives in reviewable batches
 MEDIA_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.json', '.md', '.txt'}
 
 
@@ -157,6 +158,7 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 	relay = Relay()
 	mcp_session = mcp_server.Session(dialogs=relay, live=relay)
 	mcp_session.use(ws)
+	mcp_session.draft_limit = DRAFT_BATCH
 	mcp = mcp_server.build_server(mcp_session)
 	mcp.streamable_http_app()  # creates the session manager the lifespan runs
 
@@ -284,6 +286,29 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 			],
 		}
 
+	@app.post('/imports', dependencies=guard)
+	async def upload_import(request: Request, name: str) -> dict[str, Any]:
+		"""A test case sheet, as the raw request body. Saved under imports/ and made readable."""
+		from nkqa import imports
+
+		try:
+			path = imports.save_upload(ws, name, await request.body())
+		except ValueError as e:
+			raise HTTPException(status_code=400, detail=str(e)) from e
+		try:
+			sheets = imports.to_csv(path)
+		except Exception as e:  # a corrupt or password-protected workbook: say so, keep nothing
+			path.unlink(missing_ok=True)
+			raise HTTPException(status_code=400, detail=f'Could not read {name}: {type(e).__name__}') from e
+		return {
+			'path': path.relative_to(ws.root).as_posix(),
+			'sheets': [
+				{'name': s.name, 'csv': s.csv.relative_to(ws.root).as_posix(), 'rows': s.rows, 'columns': s.columns}
+				for s in sheets
+			],
+			'note': imports.attachment_note(ws, path, sheets),
+		}
+
 	@app.get('/library', dependencies=guard)
 	def library_tests() -> dict[str, Any]:
 		from nkqa import library
@@ -356,7 +381,7 @@ async def _serve(socket: WebSocket, app: FastAPI) -> None:
 	# credential typed once cover the MCP tools too. The relay makes their asks this window's.
 	ctx = build_context(ws, channel, app.state.mcp_session.require_hitl())
 	relay.target = channel
-	claude_turn = ClaudeTurn(ws, f'http://127.0.0.1:{app.state.port}/mcp', send)
+	claude_turn = ClaudeTurn(ws, f'http://127.0.0.1:{app.state.port}/mcp', send, app.state.mcp_session)
 	watchers: set[asyncio.Task[None]] = set()
 	try:
 		while True:
@@ -392,8 +417,9 @@ async def _serve(socket: WebSocket, app: FastAPI) -> None:
 class ClaudeTurn:
 	"""What a `say` needs to become a `claude -p` turn."""
 
-	def __init__(self, ws: Workspace, mcp_url: str, send: Any):
+	def __init__(self, ws: Workspace, mcp_url: str, send: Any, mcp_session: Any = None):
 		self.ws, self.mcp_url, self.send = ws, mcp_url, send
+		self.mcp_session = mcp_session
 		self.naming: set[asyncio.Task[None]] = set()
 
 	async def start(self, text: str, chat_id: str, job_id: str) -> tuple[str, Any]:
@@ -405,6 +431,8 @@ class ClaudeTurn:
 			await self.send({'type': 'chat', 'id': chat_id, 'title': ''})
 
 		async def work() -> int:
+			if self.mcp_session is not None:
+				self.mcp_session.drafted = 0  # a new message, a new batch
 			cfg = config_mod.load(self.ws.config_file)
 			brief = prompts.desktop_brief(cfg.app_name, cfg.base_url)
 			code = await claude.turn(
@@ -420,7 +448,7 @@ class ClaudeTurn:
 		return chat_id, work()
 
 	async def name(self, chat_id: str, first_message: str) -> None:
-		title = await claude.make_title(first_message)
+		title = await claude.make_title(claude.readable(first_message))
 		if title:
 			claude.save_title(self.ws.chat_titles_file, chat_id, title)
 			await self.send({'type': 'chat', 'id': chat_id, 'title': title})

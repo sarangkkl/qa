@@ -52,3 +52,31 @@ async function post(c: Connection, path: string): Promise<void> {
 export const claudeLogin = (c: Connection) => post(c, '/claude/login')
 /** The sidecar opens it: the webview has no way to hand a URL to the system browser. */
 export const openPage = (c: Connection, which: 'install' | 'upgrade') => post(c, `/open/${which}`)
+
+export interface ImportedSheet {
+	name: string
+	csv: string
+	rows: number
+	columns: string[]
+}
+
+export interface Imported {
+	path: string
+	sheets: ImportedSheet[]
+	/** The [Attached: …] line that goes in front of the chat message. */
+	note: string
+}
+
+/** A test case sheet, sent as the raw body. The server names it; the error says why it refused. */
+export async function uploadImport(c: Connection, file: File): Promise<Imported> {
+	const response = await fetch(`${httpBase(c)}/imports?name=${encodeURIComponent(file.name)}`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/octet-stream' },
+		body: file,
+	})
+	if (!response.ok) {
+		const detail = (await response.json().catch(() => null)) as { detail?: string } | null
+		throw new Error(detail?.detail ?? `upload failed (${response.status})`)
+	}
+	return (await response.json()) as Imported
+}

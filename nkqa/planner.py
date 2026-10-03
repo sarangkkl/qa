@@ -21,7 +21,7 @@ class DraftStep(BaseModel):
 
 
 class DraftScenario(BaseModel):
-	area: str = Field(description='short kebab-case folder grouping, e.g. "checkout"')
+	area: str = Field(description='folder grouping, e.g. "checkout"; use / for sub-folders, e.g. "projects/creation"')
 	slug: str = Field(description='short kebab-case file name, e.g. "purchase-with-coupon"')
 	title: str
 	tags: list[str] = []
@@ -63,6 +63,11 @@ def gather_context(ws: Workspace, config: Config) -> str:
 	return '\n\n'.join(parts)
 
 
+def folder(area: str) -> str:
+	"""A scenario's folder: each level slugified, the levels kept - imported modules nest."""
+	return '/'.join(slugify(part) for part in area.split('/') if part.strip()) or slugify(area)
+
+
 def write_drafts(
 	ws: Workspace, drafts: list[DraftScenario], force: bool = False, ticket: str = ''
 ) -> tuple[list[Scenario], list[str]]:
@@ -70,7 +75,7 @@ def write_drafts(
 	written: list[Scenario] = []
 	skipped: list[str] = []
 	for d in drafts:
-		sid = f'{slugify(d.area)}/{slugify(d.slug)}'
+		sid = f'{folder(d.area)}/{slugify(d.slug)}'
 		path = ws.scenarios_dir / f'{sid}.md'
 		if path.exists() and not force:
 			skipped.append(sid)
