@@ -1,5 +1,8 @@
 # The sidecar goes here
 
+Releases are built by CI on all platforms - see [RELEASING.md](../../../RELEASING.md). This page is
+about how the server is packaged and why.
+
 `nkqa-server/` - a PyInstaller **onedir** folder (`nkqa-server` plus `_internal/`). Tauri copies
 it into the app as the resource `server/` (`tauri.conf.json` → `bundle.resources`), and `lib.rs`
 (`server_command`) spawns `<resources>/server/nkqa-server` by path.

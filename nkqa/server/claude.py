@@ -45,9 +45,13 @@ def find_claude() -> str:
 	if found:
 		return found
 	home = Path.home()
-	for folder in (home / '.local/bin', home / '.claude/local', Path('/opt/homebrew/bin'), Path('/usr/local/bin')):
-		if (folder / 'claude').is_file():
-			return str(folder / 'claude')
+	folders = [home / '.local/bin', home / '.claude/local', Path('/opt/homebrew/bin'), Path('/usr/local/bin')]
+	if os.environ.get('APPDATA'):
+		folders.append(Path(os.environ['APPDATA']) / 'npm')  # npm's global bin on Windows
+	for folder in folders:
+		for name in ('claude', 'claude.exe', 'claude.cmd'):
+			if (folder / name).is_file():
+				return str(folder / name)
 	shell = os.environ.get('SHELL', '')
 	if shell and sys.platform != 'win32':
 		with contextlib.suppress(OSError, subprocess.TimeoutExpired):
@@ -56,6 +60,23 @@ def find_claude() -> str:
 			if lines and Path(lines[-1]).is_file():
 				return lines[-1]
 	return ''
+
+
+def launcher(claude: str) -> list[str]:
+	"""How to start `claude`: usually the path itself.
+
+	An npm install on Windows is a `claude.cmd` shim, and everything handed to a .cmd goes through
+	cmd.exe - which cuts an argument at the first newline and the whole line at 8191 characters,
+	i.e. our system-prompt brief. So run the shim's target with node directly instead.
+	"""
+	path = Path(claude)
+	if path.suffix.lower() not in ('.cmd', '.bat'):
+		return [claude]
+	cli = path.parent / 'node_modules' / '@anthropic-ai' / 'claude-code' / 'cli.js'
+	node = shutil.which('node') or next(
+		(str(path.parent / n) for n in ('node.exe', 'node') if (path.parent / n).is_file()), ''
+	)
+	return [node, str(cli)] if cli.is_file() and node else [claude]
 
 
 def child_env(claude: str) -> dict[str, str]:
@@ -84,7 +105,7 @@ def ready(logged_in: bool, auth_method: str, provider: str, plan: str) -> bool:
 
 async def _output(claude: str, *args: str) -> str:
 	proc = await asyncio.create_subprocess_exec(
-		claude,
+		*launcher(claude),
 		*args,
 		stdin=asyncio.subprocess.DEVNULL,
 		stdout=asyncio.subprocess.PIPE,
@@ -141,7 +162,7 @@ async def login() -> None:
 	if not claude:
 		return
 	await asyncio.create_subprocess_exec(
-		claude,
+		*launcher(claude),
 		'auth',
 		'login',
 		stdin=asyncio.subprocess.DEVNULL,
@@ -301,7 +322,7 @@ async def make_title(first_message: str) -> str:
 def command(claude: str, mcp_url: str, token: str, session_id: str, resume: bool, brief: str) -> list[str]:
 	config = {'mcpServers': {'nkqa': {'type': 'http', 'url': mcp_url, 'headers': {'Authorization': f'Bearer {token}'}}}}
 	return [
-		claude,
+		*launcher(claude),
 		'-p',
 		'--output-format',
 		'stream-json',

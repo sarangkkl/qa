@@ -19,6 +19,7 @@ from nkqa import scenarios as scenarios_mod
 from nkqa import workspace as workspace_mod
 from nkqa.server import auth
 from nkqa.server.app import create_app, safe_artifact
+from nkqa.server.claude import find_claude as unpatched_find_claude  # the autouse fixture stubs the module's
 from nkqa.server.jobs import JobRunner
 from nkqa.workspace import Workspace
 
@@ -1177,3 +1178,44 @@ def test_a_standby_server_takes_its_workspace_later(ws: Workspace) -> None:
 	finally:
 		if proc.poll() is None:
 			proc.kill()
+
+
+def test_an_npm_shim_on_windows_runs_through_node_not_cmd_exe(tmp_path: Path) -> None:
+	"""cmd.exe cuts arguments at newlines; the system-prompt brief has plenty."""
+	from nkqa.server import claude
+
+	npm = tmp_path / 'npm'
+	cli = npm / 'node_modules' / '@anthropic-ai' / 'claude-code' / 'cli.js'
+	cli.parent.mkdir(parents=True)
+	cli.write_text('// cli')
+	(npm / 'node.exe').write_text('')
+	shim = npm / 'claude.cmd'
+	shim.write_text('@node cli.js %*')
+	argv = claude.launcher(str(shim))
+	assert argv[-1] == str(cli) and argv[0].endswith(('node', 'node.exe'))
+	assert claude.launcher(str(tmp_path / 'claude.exe')) == [str(tmp_path / 'claude.exe')]
+	assert claude.launcher('/usr/local/bin/claude') == ['/usr/local/bin/claude']
+	cli.unlink()  # a shim we cannot see through is still better than nothing
+	assert claude.launcher(str(shim)) == [str(shim)]
+
+
+def test_claude_is_found_where_npm_puts_it_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	import shutil
+
+	npm = tmp_path / 'AppData' / 'npm'
+	npm.mkdir(parents=True)
+	(npm / 'claude.cmd').write_text('')
+	real_is_file = Path.is_file
+
+	def nothing_on_path(name: str) -> None:
+		return None
+
+	def only_ours(self: Path) -> bool:  # a Windows box: no Homebrew, no ~/.local
+		return str(self).startswith(str(tmp_path)) and real_is_file(self)
+
+	monkeypatch.setattr(shutil, 'which', nothing_on_path)
+	monkeypatch.setattr(Path, 'home', lambda: tmp_path / 'home')
+	monkeypatch.setattr(Path, 'is_file', only_ours)
+	monkeypatch.setenv('APPDATA', str(tmp_path / 'AppData'))
+	monkeypatch.setenv('SHELL', '')
+	assert unpatched_find_claude() == str(npm / 'claude.cmd')
