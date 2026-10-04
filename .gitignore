@@ -14,3 +14,5 @@ runs
 build/
 dist/
 *.spec
+# ...except the sidecar build recipe: CI builds from it
+!nkqa-server.spec
