@@ -93,7 +93,7 @@ jobs:
           projectPath: desktop
           tagName: ${{ github.ref_name }}
           releaseName: Kiwame ${{ github.ref_name }}
-          releaseBody: Installers for macOS (Apple Silicon and Intel), Windows and Linux. Unsigned for now - see RELEASING.md for how to open them.
+          releaseBody: 'Installers for macOS (Apple Silicon and Intel), Windows and Linux. Unsigned for now. macOS: open it once, then System Settings → Privacy & Security → Open Anyway. Windows: More info → Run anyway.'
           releaseDraft: true
           prerelease: false
 

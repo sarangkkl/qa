@@ -126,9 +126,13 @@ workspace and send one chat message.
 
 Until the builds are signed, operating systems warn about them:
 
-- **macOS**: "Kiwame can't be opened because Apple cannot check it for malicious software" (or
-  "is damaged"). Right-click the app → **Open** → **Open**, once. Or in Terminal:
+- **macOS**: drag Kiwame to Applications, eject the disk image, then open Kiwame from
+  Applications (not from the disk image). macOS says "Kiwame Not Opened". Click **Done**, then
+  System Settings → **Privacy & Security** → scroll down → **Open Anyway**, once. (Right-click →
+  Open no longer works since macOS 15.) Or in Terminal:
   `xattr -dr com.apple.quarantine /Applications/Kiwame.app`.
+  The builds are ad-hoc signed (`signingIdentity: "-"`). Without that, macOS calls the app
+  "damaged" and offers no way past it except the Terminal command.
 - **Windows**: SmartScreen says "Windows protected your PC". Click **More info** → **Run anyway**.
 - **Linux**: no warning. Make the AppImage executable (`chmod +x`) and run it.
 
