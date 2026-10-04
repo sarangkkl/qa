@@ -29,6 +29,57 @@ only build for the operating system it runs on. So the Windows build happens on 
 
 The draft step is deliberate. Nothing reaches anyone until you press **Publish**.
 
+## Your first release (one time, step by step)
+
+Everything is already committed and pushed on `desktop-claude`. The first run is a **test**: a
+throwaway `-rc1` tag, so any Windows/Linux surprises show up before a real version number is used.
+
+**Step 1 - start a test build.** In the repo folder:
+
+    git checkout desktop-claude
+    git pull
+    git tag v0.1.0-rc1
+    git push origin v0.1.0-rc1
+
+Pushing the tag is what starts the build. (Any tag starting with `v` does.)
+
+**Step 2 - watch it.** Open https://github.com/sarangkkl/qa/actions, click the newest
+"Release" run. Or in Terminal: `gh run watch`. You will see:
+
+- *Checks* first (2-4 min). If it fails, nothing else runs.
+- then four builds side by side: *macOS Apple Silicon*, *macOS Intel*, *Windows x64*, *Linux x64*
+  (20-40 min). Green tick = that installer is ready.
+
+**Step 3 - if something is red.** Click the red job, then the red step, and copy the error.
+Send it to Claude (or fix it), commit, then re-run the test with a new tag:
+
+    git tag v0.1.0-rc2
+    git push origin v0.1.0-rc2
+
+Expect this on the first try: the tests have only ever run on macOS, and Windows and Linux have
+never been built.
+
+**Step 4 - try the installers.** When all four are green, open
+https://github.com/sarangkkl/qa/releases. There is a **Draft** release "Kiwame v0.1.0-rc1"
+(only you can see drafts). Download each installer, install it, open a workspace, send one chat
+message. Unsigned builds warn on first open - see "What users see today" below.
+
+**Step 5 - throw the test away.** On the draft release: **Delete**. Then remove the tag:
+
+    git push --delete origin v0.1.0-rc1
+    git tag -d v0.1.0-rc1
+
+**Step 6 - the real release.** When an rc build works everywhere:
+
+    git tag v0.1.0
+    git push origin v0.1.0
+
+Wait for the four green builds, open the draft "Kiwame v0.1.0", write a few lines of notes,
+press **Publish release**. That is the moment people can download it.
+
+(Releases are built from whatever commit the tag points at, so this works from `desktop-claude`.
+When you merge it into `master`, tag on `master` from then on.)
+
 ## Releasing a new version
 
 1. **Bump the version** (it lives in three files; this sets all of them):
@@ -41,7 +92,7 @@ The draft step is deliberate. Nothing reaches anyone until you press **Publish**
        git tag v0.2.0
        git push origin HEAD v0.2.0
 
-3. **Watch it**: GitHub → the `qa` repo → **Actions** → "Release". About 25-40 minutes; the Mac and
+3. **Watch it**: GitHub → the `qa` repo → **Actions** → "Release" (or `gh run watch`). About 25-40 minutes; the Mac and
    Windows builds are the slow ones. If one platform fails, the others still finish (open the red
    job to see why).
 
@@ -106,16 +157,17 @@ Azure Trusted Signing (~$10/month); Tauri supports it via `bundle.windows.signCo
 
 ## Costs
 
-The `qa` repo is private, so Actions minutes count against the account's free 2,000/month, and
-macOS minutes count 10×, Windows 2×. One release is roughly 300-500 of those minutes. A public
-repo would build for free.
+The `qa` repo is public, so GitHub Actions minutes are free, Mac and Windows included. If you make
+the repo private, they count against the free 2,000 minutes a month (macOS 10×, Windows 2×) -
+roughly 300-500 minutes per release.
 
-## Publishing to the public repo later
+## Who can download
 
-Releases currently land on the private `qa` repo, so only people with access can download. To
-publish to the public `sarangkkl/nkqa` instead: create a fine-grained token with *Contents: write*
-on `nkqa`, save it as the secret `RELEASE_TOKEN`, and give the release step
-`owner: sarangkkl`, `repo: nkqa` and `GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}`.
+The `qa` repo is **public**, so a published release (and the source code) is visible to anyone;
+drafts are visible only to you. To keep the code private but the downloads public: make `qa`
+private, create a fine-grained token with *Contents: write* on the public `sarangkkl/nkqa`, save
+it as the secret `RELEASE_TOKEN`, and give the release step `owner: sarangkkl`, `repo: nkqa` and
+`GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}`.
 
 ## Building locally (Mac only)
 

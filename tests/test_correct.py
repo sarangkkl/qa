@@ -94,10 +94,11 @@ def test_a_correction_already_reflected_writes_nothing(ws: Workspace, monkeypatc
 def test_the_correction_is_committed_so_it_can_be_reverted(ws: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
 	"""git diff is the review surface for every appmap writer; this one is no exception."""
 	subprocess.run(['git', 'init', '-q'], cwd=ws.root, check=True)
+	# The commit is made as the user, with their git identity; a fresh CI runner has none.
+	subprocess.run(['git', 'config', 'user.email', 't@e.c'], cwd=ws.root, check=True)
+	subprocess.run(['git', 'config', 'user.name', 'T'], cwd=ws.root, check=True)
 	subprocess.run(['git', 'add', '-A'], cwd=ws.root, check=True)
-	subprocess.run(
-		['git', '-c', 'user.email=t@e.c', '-c', 'user.name=T', 'commit', '-q', '-m', 'base'], cwd=ws.root, check=True
-	)
+	subprocess.run(['git', 'commit', '-q', '-m', 'base'], cwd=ws.root, check=True)
 	stub(monkeypatch, AppmapUpdate(files=[FileUpdate(file='pages/clients.md', content=FIXED)]))
 
 	asyncio.run(correct_mod.correct(ws, Config(), FakeChannel(), 'rows are clickable'))
