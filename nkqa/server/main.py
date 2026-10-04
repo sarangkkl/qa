@@ -9,7 +9,6 @@ narration goes through the Channel instead.
 import argparse
 import contextlib
 import json
-import os
 import signal
 import socket
 import sys
@@ -55,7 +54,9 @@ def exit_when_parent_does() -> None:
 	def watch() -> None:
 		with contextlib.suppress(Exception):
 			sys.stdin.buffer.read()  # blocks until the parent's end of the pipe closes
-		os.kill(os.getpid(), signal.SIGTERM)  # uvicorn's own handler, so shutdown stays clean
+		# uvicorn's own handler, so shutdown stays clean (closing the browser). Not os.kill: on
+		# Windows that is TerminateProcess, which skips all of it.
+		signal.raise_signal(signal.SIGTERM)
 
 	threading.Thread(target=watch, daemon=True).start()
 
@@ -149,7 +150,9 @@ def main() -> None:
 	sock, port = bind_port(args.port)
 	print(json.dumps({'ready': True, 'port': port, 'token': auth.new_token(), 'workspace': str(ws.root)}), flush=True)
 
-	uvicorn.run(create_app(ws, port), fd=sock.fileno(), log_level=args.log_level, access_log=False)
+	# The socket itself, not fd=: uvicorn treats an fd as a Unix socket, and Windows has none.
+	config = uvicorn.Config(create_app(ws, port), log_level=args.log_level, access_log=False)
+	uvicorn.Server(config).run(sockets=[sock])
 
 
 if __name__ == '__main__':
