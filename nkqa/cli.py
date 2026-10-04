@@ -12,14 +12,16 @@ from nkqa.workspace import Workspace
 
 
 def build_parser() -> argparse.ArgumentParser:
-	parser = argparse.ArgumentParser(prog='qa', description=__doc__)
+	parser = argparse.ArgumentParser(prog='kiwame', description=__doc__)
 	sub = parser.add_subparsers(dest='command')
 
 	init = sub.add_parser('init', help='create a QA workspace in the current directory')
 	init.add_argument('--app-name', default='', help='app name to write into config.yaml')
 	init.add_argument('--base-url', default='', help='base URL to write into config.yaml')
-	sub.add_parser('chat', help='interactive session (same as running `qa` with no arguments)')
-	mcp = sub.add_parser('mcp', help='serve nkqa to Claude Code / Codex / Cursor over MCP stdio (no nkqa model calls)')
+	sub.add_parser('chat', help='interactive session (same as running `kiwame` with no arguments)')
+	mcp = sub.add_parser(
+		'mcp', help='serve Kiwame to Claude Code / Codex / Cursor over MCP stdio (Kiwame makes no model calls)'
+	)
 	mcp.add_argument('--workspace', default='', help='workspace dir (default: found from cwd, else use_workspace)')
 
 	plan = sub.add_parser('plan', help='draft test scenarios from app knowledge (no browser)')
@@ -67,14 +69,22 @@ def build_parser() -> argparse.ArgumentParser:
 	bug.add_argument('--project', default='', metavar='KEY', help='Jira project key (default: jira.project in config)')
 
 	replay = sub.add_parser('replay', help='replay a recorded run deterministically, without the LLM')
-	replay.add_argument('name', nargs='?', default='', help='run name, dir, or history.json path')
+	replay.add_argument(
+		'name', nargs='?', default='', help='a Library test id or folder, a run name, dir, or history.json path'
+	)
 	replay.add_argument('--all', action='store_true', help='replay every recorded run (CI mode)')
 	replay.add_argument('--var', action='append', default=[], metavar='KEY=VALUE', help='override a recorded value')
+
+	sub.add_parser('library', help='list the Library: tests that passed and replay without a model')
+	library_replay = sub.add_parser('library-replay', help='replay Library tests with no model')
+	library_replay.add_argument('target', nargs='?', default='', help='a test id or folder; empty for all')
+	library_save = sub.add_parser('library-save', help='keep a passing run as a Library test (human only)')
+	library_save.add_argument('run', help='run dir name under runs/')
 
 	ticket = sub.add_parser('ticket', help='read a Jira ticket and show it (no scenarios written)')
 	ticket.add_argument('id', help='issue key like PROJ-123, or its browse URL')
 
-	connect = sub.add_parser('connect', help='set up a connector in config.yaml (jira), then sign in with qa auth')
+	connect = sub.add_parser('connect', help='set up a connector in config.yaml (jira), then sign in with kiwame auth')
 	connect.add_argument('name', nargs='?', default='', help='connector to set up, e.g. jira')
 	connect.add_argument('--project', default='', metavar='KEY', help='default Jira project key for filing bugs')
 
@@ -109,14 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
 	set_model.add_argument('--provider', default='', metavar='NAME', help='anthropic | openai')
 	set_model.add_argument('--smart', default='', metavar='ID', help='model for planning and revising')
 	set_model.add_argument('--fast', default='', metavar='ID', help='model for executing, reflecting, chat')
-	sub.add_parser('version', help='show nkqa and browser-use versions')
+	sub.add_parser('version', help='show Kiwame and browser-use versions')
 	return parser
 
 
 def require_workspace() -> Workspace:
 	ws = workspace_mod.find()
 	if ws is None:
-		print('Not inside a QA workspace. Create one first:  qa init')
+		print('Not inside a QA workspace. Create one first:  kiwame init')
 		sys.exit(2)
 	return ws
 
@@ -135,7 +145,7 @@ def main() -> None:
 	if command == 'version':
 		from importlib.metadata import version as pkg_version
 
-		print(f'nkqa {pkg_version("nkqa")} (browser-use {pkg_version("browser-use")})')
+		print(f'Kiwame {pkg_version("nkqa")} (browser-use {pkg_version("browser-use")})')
 		sys.exit(0)
 	if command == 'init':
 		sys.exit(actions.run_sync(actions.init(ch, None, args.app_name, args.base_url)))
@@ -188,6 +198,12 @@ def main() -> None:
 		sys.exit(actions.run_sync(actions.compare(ws, ch, args.first, args.second)))
 	if command == 'vault':
 		sys.exit(actions.run_sync(actions.vault(ws, ch, args.action, args.name, args.scenario)))
+	if command == 'library':
+		sys.exit(actions.run_sync(actions.library_list(ws, ch)))
+	if command == 'library-replay':
+		sys.exit(actions.run_sync(actions.library_replay(ws, ch, args.target)))
+	if command == 'library-save':
+		sys.exit(actions.run_sync(actions.library_save(ws, ch, args.run)))
 	if command == 'replay':
 		sys.exit(actions.run_sync(actions.replay(ws, ch, args.name, args.all, args.var)))
 

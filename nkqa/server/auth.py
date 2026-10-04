@@ -34,6 +34,10 @@ def set_token(value: str) -> None:
 	_token = value
 
 
+def current() -> str:
+	return _token
+
+
 def token_ok(candidate: str | None) -> bool:
 	return bool(candidate) and bool(_token) and secrets.compare_digest(candidate or '', _token)
 

@@ -42,10 +42,13 @@ def issue_key(reference: str) -> str:
 def jira_server(config: Config) -> MCPServer:
 	spec = config.mcp_server('jira')
 	if spec is None:
+		# Two commands, not a YAML snippet: `connect` is human_only, so an agent that hits this
+		# has to hand the keystroke back rather than configure the workspace itself.
 		raise RuntimeError(
-			'No jira server in config.yaml. Add:\n'
-			'mcp:\n  jira:\n    command: npx\n'
-			"    args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']"
+			'Jira is not set up in this workspace. In a terminal, from the workspace folder:\n'
+			'  kiwame connect jira --project KEY   # writes the mcp-remote server into config.yaml\n'
+			'  kiwame auth jira                    # browser sign-in (needs Node.js)\n'
+			'Then restart the MCP client, so the Jira tools register.'
 		)
 	return spec
 
@@ -143,7 +146,7 @@ async def read_issue(config: Config, ch: Any, key: str) -> tuple[str, str]:
 	except Exception as e:
 		hint = ''
 		# browser-use's MCP client gives connect a hard 10s, which a cold `npx -y mcp-remote`
-		# or an expired token both blow through, and the two look identical from here. `qa auth`
+		# or an expired token both blow through, and the two look identical from here. `kiwame auth`
 		# spawns the same command with 300s and a browser, which is the way out of both.
 		if 'Failed to connect' in str(e) or isinstance(e, TimeoutError):
 			hint = '\n   Jira did not answer within 10s. Sign in (or warm it up) with:  /auth jira'

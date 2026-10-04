@@ -1,4 +1,4 @@
-# nkqa desktop
+# Kiwame desktop
 
 Tauri v2 shell + React/TypeScript frontend over the sidecar protocol in
 [../docs/PROTOCOL.md](../docs/PROTOCOL.md).

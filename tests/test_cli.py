@@ -34,8 +34,27 @@ def test_init_then_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 	assert run_cli(monkeypatch, ['list']) == 0  # empty workspace lists fine
 
 
+def test_init_warns_when_the_folder_already_had_its_own_claude_md(tmp_path: Path) -> None:
+	"""Claude Code skips its native AGENTS.md read whenever a CLAUDE.md exists, and we refuse to
+	edit one we did not write - so the human has to be told, or the brief is silently unread."""
+	import asyncio
+
+	from conftest import FakeChannel
+
+	from nkqa import actions
+
+	(tmp_path / 'CLAUDE.md').write_text('# their own conventions\n')
+	ch = FakeChannel()
+	assert asyncio.run(actions.init(ch, tmp_path)) == 0
+	assert '@AGENTS.md' in ch.out and 'already had its own CLAUDE.md' in ch.out
+
+	quiet = FakeChannel()
+	assert asyncio.run(actions.init(quiet, tmp_path / 'fresh')) == 0
+	assert 'already had its own' not in quiet.out
+
+
 def test_mcp_is_a_workspace_free_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-	"""`qa mcp` must start outside a workspace (the agent picks one later), but a --workspace
+	"""`kiwame mcp` must start outside a workspace (the agent picks one later), but a --workspace
 	that is not one is a usage error, like every other bad argument."""
 	args = cli.build_parser().parse_args(['mcp', '--workspace', 'x'])
 	assert args.command == 'mcp' and args.workspace == 'x'

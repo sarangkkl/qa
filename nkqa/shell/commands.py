@@ -169,6 +169,18 @@ async def _replay(ctx: ShellContext, a: dict[str, Any]) -> int:
 	return await actions.replay(ctx.ws, ctx.ch, str(a.get('run', '')), bool(a.get('all')), None, ctx.hitl)
 
 
+async def _library(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.library_list(ctx.ws, ctx.ch)
+
+
+async def _library_replay(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.library_replay(ctx.ws, ctx.ch, str(a.get('target', '')), ctx.hitl)
+
+
+async def _library_save(ctx: ShellContext, a: dict[str, Any]) -> int:
+	return await actions.library_save(ctx.ws, ctx.ch, str(a.get('run', '')), ctx.hitl)
+
+
 async def _list(ctx: ShellContext, a: dict[str, Any]) -> int:
 	_remember_runs(ctx)
 	return await actions.list_runs(ctx.ws, ctx.ch)
@@ -269,7 +281,7 @@ ACTION_COMMANDS = [
 		'approve',
 		'review a scenario and approve it for execution',
 		_approve,
-		[Param('id', 'scenario id', required=True)],
+		[Param('id', 'scenario id, or several separated by spaces (one decision for all)', required=True)],
 		human_only=True,
 	),
 	Command(
@@ -331,6 +343,20 @@ ACTION_COMMANDS = [
 		'replay a recorded run deterministically, without the LLM',
 		_replay,
 		[Param('run', 'run dir name'), Param('all', 'replay every recorded run', type='boolean', flag=True)],
+	),
+	Command('library', 'list the Library: tests that passed and replay without a model', _library),
+	Command(
+		'library-replay',
+		'replay Library tests with no model: one test, a folder, or all of them',
+		_library_replay,
+		[Param('target', 'a test id or a folder; empty for the whole Library')],
+	),
+	Command(
+		'library-save',
+		'keep a passing run as a Library test (it must replay once by itself first)',
+		_library_save,
+		[Param('run', 'the run dir name', required=True)],
+		human_only=True,  # what enters the regression suite is the human's call
 	),
 	Command(
 		'suite',

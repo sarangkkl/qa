@@ -1,7 +1,7 @@
 """nkqa as an MCP server: the user's own coding agent is the brain and the hands.
 
-`qa mcp` speaks MCP over stdio to Claude Code, Codex or Cursor. The agent reads the appmap,
-writes scenarios, drives the browser one action at a time and reports verdicts; nkqa provides
+`kiwame mcp` speaks MCP over stdio to Claude Code, Codex or Cursor. The agent reads the appmap,
+writes scenarios, drives the browser one action at a time and reports verdicts; Kiwame provides
 the workspace, a recorded browser, the evidence, and the three gates - approval, permission,
 credentials - which reach the human through native dialogs the agent cannot answer.
 
@@ -23,6 +23,7 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO, Any
 
 import anyio
@@ -37,6 +38,7 @@ from nkqa import workspace as workspace_mod
 from nkqa.appmap import AppmapUpdate, FileUpdate
 from nkqa.config import Config
 from nkqa.dialogs import DialogChannel
+from nkqa.execution import screencast
 from nkqa.execution.driver import Driver, read_step_log
 from nkqa.execution.evidence import recorded_runs, recording_file, step_count
 from nkqa.execution.report import ScenarioResult, StepVerdict, last_verdict, write_results
@@ -45,29 +47,12 @@ from nkqa.execution.stream import redact
 from nkqa.hitl import HumanInTheLoop
 from nkqa.jira import issue_key, read_issue
 from nkqa.planner import PLANNER_SYSTEM, DraftScenario, gather_context, write_drafts
-from nkqa.prompts import QA_RULES_MCP
+from nkqa.prompts import INSTRUCTIONS, QA_RULES_MCP
 from nkqa.reflector import run_facts
 from nkqa.scenarios import Scenario
 from nkqa.ui import Ask, Channel, Event
 from nkqa.vault import Vault
 from nkqa.workspace import Workspace
-
-INSTRUCTIONS = """\
-nkqa is a QA workspace for a web app. You are the QA engineer; nkqa gives you the notebook
-(appmap), the scenario files, a real recorded browser and the evidence. It never calls a model.
-Workflow: workspace_status -> read_appmap -> write_scenario per draft -> the human reviews ->
-approve_scenario only when the human says so -> start_run -> loop { browser_state -> one action }
--> finish_run -> update_appmap if the run taught something -> tell the human.
-Hard rules:
-1. Ask before anything irreversible: request_permission before deleting, paying, sending or
-   changing settings. Denied means skip that step and report it, never retry.
-2. Never invent credentials: ask_credential(name), then type the literal <secret>name</secret>.
-   You never see values; do not try to.
-3. A broken feature is a finding, not an obstacle: record expected vs actual, keep testing.
-Approval, permissions and credentials are the human's keystrokes in a native dialog on their
-screen. Only scenarios reported as `ok` can run. When you need information, ask the human in
-chat - there is no tool for that.
-"""
 
 REFUSALS = {
 	'draft': 'is not approved yet. Ask the human to review it; call approve_scenario("{id}") when they say so.',
@@ -107,8 +92,15 @@ class CapturingChannel(Channel):
 class Session:
 	"""Process-wide state: one workspace, one HITL, at most one open browser."""
 
-	def __init__(self, dialogs: Channel | None = None):
+	def __init__(self, dialogs: Channel | None = None, live: Channel | None = None):
 		self.dialogs: Channel = dialogs or DialogChannel()
+		# A window that can show the browser. The desktop sidecar sets it; stdio has none.
+		self.live = live
+		self._cast: asyncio.Task[None] | None = None
+		# Drafts per turn, so a 300-row import arrives as batches a human can review. 0 = no limit
+		# (`kiwame mcp`); the desktop sets one and resets the count at the start of every turn.
+		self.draft_limit = 0
+		self.drafted = 0
 		self.ws: Workspace | None = None
 		self.config = Config()
 		self.hitl: HumanInTheLoop | None = None
@@ -148,8 +140,22 @@ class Session:
 			raise ValueError('Element indices are stale: call browser_state first, then use an index from it.')
 		return driver
 
+	def begin(self, driver: Driver, scenario: Scenario | None, run_dir: Path) -> None:
+		self.driver, self.scenario, self.run_dir = driver, scenario, run_dir
+		if self.live is not None and driver.session is not None:
+			self._cast = asyncio.create_task(self._screencast(driver.session, self.live))
+
+	async def _screencast(self, browser: Any, live: Channel) -> None:
+		async with screencast.stream(SimpleNamespace(browser_session=browser), live):
+			await asyncio.Event().wait()  # until end_run cancels it
+
 	async def end_run(self, aborted: bool = False) -> Path:
 		driver = self.require_run()
+		if self._cast is not None:
+			self._cast.cancel()
+			with contextlib.suppress(asyncio.CancelledError):
+				await self._cast
+			self._cast = None
 		await driver.close(aborted=aborted)
 		self.driver = None
 		run_dir, self.run_dir = driver.run_dir, None
@@ -178,7 +184,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@tool()
 	async def workspace_status() -> str:
-		"""Which nkqa workspace is active: app name, base URL, scenarios by state, runs recorded.
+		"""Which Kiwame workspace is active: app name, base URL, scenarios by state, runs recorded.
 		Call this first. If it reports no workspace, call list_workspaces then use_workspace,
 		or init_workspace for a new project."""
 		ws = session.ws
@@ -192,7 +198,14 @@ def build_server(session: Session) -> FastMCP:
 			f'{k}: {states.count(k)}' for k in ('ok', 'draft', 'stale', 'deprecated') if states.count(k)
 		)
 		active = f'Active run: {session.run_dir.name}' if session.run_dir else 'No run active.'
-		jira = 'configured' if session.config.mcp_server('jira') else 'not configured'
+		# The Jira tools always register and fail at call time, so this status line is where an
+		# agent learns Jira is possible at all - it has to carry the setup instructions.
+		jira = (
+			'configured'
+			if session.config.mcp_server('jira')
+			else 'not configured. To enable reading tickets and filing bugs, the human runs '
+			'`kiwame connect jira --project KEY` then `kiwame auth jira` in a terminal, and restarts this client.'
+		)
 		return (
 			f'Workspace: {ws.root}\nApp: {cfg.app_name or "(unnamed)"} — {cfg.base_url or "(no base URL)"}\n'
 			f'Scenarios: {len(states)} ({by_state or "none"})\nRuns recorded: {len(recorded_runs(ws.runs_dir))}\n'
@@ -202,7 +215,7 @@ def build_server(session: Session) -> FastMCP:
 	@tool()
 	async def list_workspaces() -> str:
 		"""Workspaces on this machine: the one the current directory is in, plus those recently
-		opened in the nkqa desktop app. Pick one with use_workspace(path)."""
+		opened in the Kiwame desktop app. Pick one with use_workspace(path)."""
 		found: dict[Path, str] = {}
 		here = workspace_mod.find()
 		if here is not None:
@@ -236,7 +249,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@tool()
 	async def init_workspace(path: str, app_name: str, base_url: str) -> str:
-		"""Create a new nkqa workspace layout in `path` (idempotent; never overwrites), then make
+		"""Create a new Kiwame workspace layout in `path` (idempotent; never overwrites), then make
 		it active. Use when the human wants to start testing an app that has no workspace yet."""
 		root = Path(path).expanduser().resolve()
 		if root in (Path.home(), Path('/')):
@@ -302,8 +315,14 @@ def build_server(session: Session) -> FastMCP:
 		call approve_scenario only for the ones they say to. Existing files are kept unless
 		force=true. Keep each scenario one journey, 3-8 steps, each with an expectation."""
 		ws = session.require_ws()
+		if session.draft_limit and session.drafted >= session.draft_limit:
+			raise ValueError(
+				f'That is {session.draft_limit} drafts this turn - the batch limit. Stop drafting: tell the human '
+				'how many are drafted so far and how many are left, and that saying "next" continues.'
+			)
 		written, skipped = write_drafts(ws, [draft], force, ticket)
 		if written:
+			session.drafted += 1
 			s = written[0]
 			return (
 				f'Wrote draft {s.id} ({s.path}).\n'
@@ -328,7 +347,7 @@ def build_server(session: Session) -> FastMCP:
 	async def start_run(scenario_id: str) -> str:
 		"""Open a recorded browser and start a run of an APPROVED scenario (refused for draft,
 		stale or deprecated; one run at a time). Returns the steps with expectations, preconditions,
-		out-of-scope items and what nkqa knows about the app, sign-in procedure included. Then
+		out-of-scope items and what Kiwame knows about the app, sign-in procedure included. Then
 		drive: browser_state -> one action (navigate/click/type_text/...) -> browser_state, verify
 		every EXPECT, and end with finish_run."""
 		ws = session.require_ws()
@@ -345,7 +364,7 @@ def build_server(session: Session) -> FastMCP:
 		run_dir = ws.scenario_run_dir(s.id)
 		driver = Driver(run_dir, hitl.secrets, session.config.headless, s.id)
 		await driver.start()
-		session.driver, session.scenario, session.run_dir = driver, s, run_dir
+		session.begin(driver, s, run_dir)
 		task = build_task(s, session.config.base_url, appmap.context_for_run(ws))
 		return (
 			f'Run {run_dir.name} started; the browser is open and recording.\n\n{task}\n\n'
@@ -368,11 +387,11 @@ def build_server(session: Session) -> FastMCP:
 		hitl.scenario_id = ''
 		driver = Driver(run_dir, hitl.secrets, session.config.headless)
 		await driver.start()
-		session.driver, session.scenario, session.run_dir = driver, None, run_dir
+		session.begin(driver, None, run_dir)
 		opened = await driver.act('navigate', {'url': url}) if url else 'No URL given: navigate first.'
 		return _clean(
 			session,
-			f'Exploring; evidence under runs/{run_dir.name}/.\n{opened}\n\nWhat nkqa knows:\n'
+			f'Exploring; evidence under runs/{run_dir.name}/.\n{opened}\n\nWhat Kiwame knows:\n'
 			f'{appmap.context_for_run(ws) or "(nothing yet)"}\n\nEnd with finish_explore(summary).',
 		)
 
@@ -401,10 +420,24 @@ def build_server(session: Session) -> FastMCP:
 	async def type_text(index: int, text: str, clear: bool = True) -> str:
 		"""Type into the input with this index. For credentials NEVER type a real value: call
 		ask_credential(name) first, then pass the literal placeholder `<secret>name</secret>` as
-		`text` - nkqa substitutes the real value inside the browser and it never reaches you."""
+		`text` - Kiwame substitutes the real value inside the browser and it never reaches you.
+		`{{unique}}` in the text becomes a per-run stamp: use it in names of things you create."""
 		return _clean(
 			session, await session.require_fresh().act('input', {'index': index, 'text': text, 'clear': clear})
 		)
+
+	@tool()
+	async def check(step: int, kind: str, value: str = '', index: int | None = None) -> str:
+		"""Prove an EXPECT of scenario step `step`, now, and record it for replay. Kinds:
+		text_visible / text_absent (value = text on the page), url_contains, title_contains,
+		element_visible (index from the latest browser_state), element_text (index + value).
+		Call it right after the action that should satisfy the expectation - a replay re-runs
+		exactly these checks with no model, so they are what the regression test asserts.
+		finish_run refuses `pass` for a step with no passing check. A failed check is a failed
+		step if the app is wrong; if you checked the wrong thing, check again."""
+		driver = session.require_fresh() if index is not None else session.require_run()
+		passed, seen = await driver.check(step, kind, value, index)
+		return _clean(session, f'{"✅ passed" if passed else "❌ FAILED"} (step {step}, {kind}): {seen}')
 
 	@tool()
 	async def scroll(direction: str = 'down', pages: float = 1.0, index: int | None = None) -> str:
@@ -476,6 +509,16 @@ def build_server(session: Session) -> FastMCP:
 		if s is None:
 			session.require_run()
 			raise ValueError('This is an explore, not a scenario run: use finish_explore(summary).')
+		# Before closing: a pass nobody checked is a claim a replay cannot re-prove, and the run
+		# must stay open so the agent can still record the check.
+		proven = session.require_run().checked_steps()
+		expecting = {i for i, step in enumerate(s.steps, 1) if step.expect}
+		unproven = [v.step for v in steps if v.verdict == 'pass' and v.step in expecting and v.step not in proven]
+		if unproven:
+			raise ValueError(
+				f'Step(s) {", ".join(map(str, unproven))} are marked pass but have no passing check. '
+				'Record one per EXPECT with check(step, kind, value), then call finish_run again.'
+			)
 		run_dir = await session.end_run()
 		verdict = write_results(run_dir, s, ScenarioResult(steps=steps, summary=summary), evidence=DRIVER_EVIDENCE)
 		session.scenario = None
@@ -590,7 +633,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@server.prompt()
 	def plan(ask: str = '', ticket: str = '', area: str = '') -> str:
-		"""Draft test scenarios from what nkqa knows about the app (no browser)."""
+		"""Draft test scenarios from what Kiwame knows about the app (no browser)."""
 		want = ask.strip() or "the human's request in this conversation"
 		extra = f'\nRead the ticket first: read_ticket("{ticket}").' if ticket else ''
 		extra += f'\nPut every scenario under the area "{area}".' if area else ''

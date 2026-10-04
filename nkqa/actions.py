@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from nkqa import config as config_mod
+from nkqa import prompts
 from nkqa import scenarios as scenarios_mod
 from nkqa import workspace as workspace_mod
 from nkqa.config import Config
@@ -42,7 +43,15 @@ def _hitl(ws: Workspace, hitl: HumanInTheLoop | None, ch: Channel) -> HumanInThe
 async def init(ch: Channel, root: Path | None = None, app_name: str = '', base_url: str = '') -> int:
 	ws = workspace_mod.create(root or Path.cwd(), app_name, base_url)
 	await ch.log(f'✅ QA workspace ready at {ws.root}')
-	await ch.log(f'   Edit {ws.config_file.name} (app URL, models), then:  qa plan "<what to test>"')
+	await ch.log(f'   Edit {ws.config_file.name} (app URL, models), then:  kiwame plan "<what to test>"')
+
+	# A CLAUDE.md we did not write blocks both routes to AGENTS.md: Claude Code skips the native
+	# read when any CLAUDE.md exists, and theirs has no import. Only the human can fix that.
+	if prompts.CLAUDE_IMPORT not in (ws.root / 'CLAUDE.md').read_text(encoding='utf-8'):
+		await ch.log(
+			f'   ⚠️  This folder already had its own CLAUDE.md. Add a line "{prompts.CLAUDE_IMPORT}" to it,\n'
+			'      or your agent will not see the QA brief in AGENTS.md.'
+		)
 
 	old_output = ws.root / 'qa_output'
 	recordings = workspace_mod.prototype_recordings(old_output)
@@ -59,7 +68,7 @@ async def list_scenarios(ws: Workspace, ch: Channel) -> int:
 
 	all_scenarios = scenarios_mod.load_all(ws.scenarios_dir)
 	if not all_scenarios:
-		await ch.log('No scenarios yet. Draft some:  qa plan "<what to test>"')
+		await ch.log('No scenarios yet. Draft some:  kiwame plan "<what to test>"')
 		return 0
 	await ch.log(f'\n{"STATUS":<12} {"LAST RUN":<9} {"ID":<36} TITLE')
 	for s in all_scenarios:
@@ -72,28 +81,41 @@ async def list_scenarios(ws: Workspace, ch: Channel) -> int:
 				{'scenario': s.id, 'state': state, 'title': s.title, 'last_verdict': verdict},
 			)
 		)
-	await ch.log('\nApprove:  qa approve <id>    Run:  qa run <id>')
+	await ch.log('\nApprove:  kiwame approve <id>    Run:  kiwame run <id>')
 	return 0
 
 
 async def approve(ws: Workspace, ch: Channel, scenario_id: str) -> int:
-	"""Human-only: never exposed to the chat agent."""
-	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
-	if s is None:
-		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
+	"""Human-only: never exposed to the chat agent.
+
+	Several ids separated by spaces are one decision: every body is shown in the one prompt, and
+	one yes approves each of them - the desktop's "Approve all" under a drafted plan.
+	"""
+	ids = scenario_id.split()
+	found = [scenarios_mod.find(ws.scenarios_dir, i) for i in ids]
+	missing = [i for i, s in zip(ids, found, strict=True) if s is None]
+	if not ids or missing:
+		await ch.log(f'No scenario "{" ".join(missing) or scenario_id}". See:  kiwame scenarios')
 		return 2
-	state = s.runnable()
-	if state == 'ok':
-		await ch.log(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
+	todo = [s for s in found if s is not None and s.runnable() != 'ok']
+	for s in found:
+		if s is not None and s.runnable() == 'ok':
+			await ch.log(f'"{s.id}" is already approved and unchanged (by {s.approved_by} at {s.approved_at}).')
+	if not todo:
 		return 0
-	body = f'\n──── {s.path} ────\n\n{s.path.read_text(encoding="utf-8")}\n────'
-	if state == 'stale':
-		body += f'\n⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.'
-	if not await ch.confirm(f'Approve "{s.id}" for execution? [y/N]: ', body=body):
+	body = ''
+	for s in todo:
+		body += f'\n──── {s.path} ────\n\n{s.path.read_text(encoding="utf-8")}\n────'
+		if s.runnable() == 'stale':
+			body += f'\n⚠️  Edited since last approval (by {s.approved_by} at {s.approved_at}) - re-approval needed.'
+	what = f'"{todo[0].id}"' if len(todo) == 1 else f'these {len(todo)} scenarios'
+	if not await ch.confirm(f'Approve {what} for execution? [y/N]: ', body=body):
 		await ch.log('Not approved.')
 		return 1
-	scenarios_mod.approve(s, scenarios_mod.git_identity(ws.root))
-	await ch.log(f'✅ Approved (hash {s.approved_hash[:12]}). Run it:  qa run {s.id}')
+	identity = scenarios_mod.git_identity(ws.root)
+	for s in todo:
+		scenarios_mod.approve(s, identity)
+		await ch.log(f'✅ Approved {s.id} (hash {s.approved_hash[:12]}). Run it:  kiwame run {s.id}')
 	return 0
 
 
@@ -122,7 +144,7 @@ async def models(ch: Channel, ws: Workspace | None = None) -> int:
 				{'role': role, 'model': name, 'provider': provider, 'missing': missing},
 			)
 		)
-	await ch.log('\nChange models with `qa set-model` or in config.yaml (models/aliases); put keys in .env.')
+	await ch.log('\nChange models with `kiwame set-model` or in config.yaml (models/aliases); put keys in .env.')
 	return 0 if ok else 1
 
 
@@ -142,7 +164,7 @@ async def set_model(ws: Workspace, ch: Channel, provider: str = '', smart: str =
 
 	cfg = config_mod.load(ws.config_file)
 	if not (provider or smart or fast):
-		await ch.log('Usage: qa set-model --provider anthropic|openai [--smart ID] [--fast ID]\n')
+		await ch.log('Usage: kiwame set-model --provider anthropic|openai [--smart ID] [--fast ID]\n')
 		for name, entries in CATALOGUE.items():
 			await ch.log(f'{PROVIDER_LABELS.get(name, name)} ({name})')
 			for entry in entries:
@@ -175,7 +197,7 @@ async def set_model(ws: Workspace, ch: Channel, provider: str = '', smart: str =
 			'so they did not move. Edit the `models:` block to bring them back.'
 		)
 	# The table is shown, but its exit code is not ours: it reports whether the keys are set,
-	# and a missing key does not mean the change failed. `qa models` answers that question.
+	# and a missing key does not mean the change failed. `kiwame models` answers that question.
 	await models(ch, ws)
 	return 0
 
@@ -187,11 +209,11 @@ KNOWN_CONNECTORS = {'jira': (config_mod.JIRA_MCP_COMMAND, config_mod.JIRA_MCP_AR
 
 
 async def connect(ws: Workspace, ch: Channel, name: str = '', project: str = '', config: Config | None = None) -> int:
-	"""Write a connector into config.yaml. Signing in is `qa auth`, which is a separate step."""
+	"""Write a connector into config.yaml. Signing in is `kiwame auth`, which is a separate step."""
 	name = name.strip().lower()
 	if name not in KNOWN_CONNECTORS:
 		known = ', '.join(sorted(KNOWN_CONNECTORS))
-		await ch.log(f'Usage: qa connect {known} [--project KEY]')
+		await ch.log(f'Usage: kiwame connect {known} [--project KEY]')
 		if name:
 			await ch.log(f'❌ I do not know how to set up "{name}". Add it under `mcp:` in config.yaml by hand.')
 		return 2
@@ -219,7 +241,7 @@ async def connect(ws: Workspace, ch: Channel, name: str = '', project: str = '',
 	)
 	if cfg.jira_project:
 		await ch.log(f'   Default project for bugs: {cfg.jira_project}')
-	await ch.log(f'\nNext, sign in:  qa auth {name}   (opens an OAuth login in your browser)')
+	await ch.log(f'\nNext, sign in:  kiwame auth {name}   (opens an OAuth login in your browser)')
 	return 0
 
 
@@ -296,7 +318,7 @@ async def auth(ws: Workspace, ch: Channel, server: str = '', reset: bool = False
 			await ch.log('   Sign-in needed. A browser window will open - approve access there.')
 
 		if not await _sign_in(spec, ch, timeout=300):
-			await ch.log(f'   ❌ {spec.name}: not authorized. Re-run:  qa auth {spec.name}')
+			await ch.log(f'   ❌ {spec.name}: not authorized. Re-run:  kiwame auth {spec.name}')
 			ok = False
 			continue
 		try:
@@ -328,7 +350,7 @@ async def plan(
 	from nkqa.planner import plan as _plan
 
 	if not ask and not ticket:
-		await ch.log('Tell me what to plan:  qa plan "<ask>"  and/or  qa plan --ticket PROJ-123')
+		await ch.log('Tell me what to plan:  kiwame plan "<ask>"  and/or  kiwame plan --ticket PROJ-123')
 		return 2
 	if ticket:
 		key = issue_key(ticket)
@@ -350,7 +372,7 @@ async def ticket(ws: Workspace, ch: Channel, reference: str = '', config: Config
 
 	key = issue_key(reference)
 	if not key:
-		await ch.log('Usage: qa ticket PROJ-123   (a browse URL works too)')
+		await ch.log('Usage: kiwame ticket PROJ-123   (a browse URL works too)')
 		return 2
 
 	body, error = await read_issue(_cfg(ws, config), ch, key)
@@ -358,7 +380,7 @@ async def ticket(ws: Workspace, ch: Channel, reference: str = '', config: Config
 		await ch.log(error)
 		return 2
 	await ch.emit(Event('log', f'\n### Ticket {key}\n{body}', {'ticket': key}))
-	await ch.log(f'\nDraft scenarios from it with:  qa plan --ticket {key}')
+	await ch.log(f'\nDraft scenarios from it with:  kiwame plan --ticket {key}')
 	return 0
 
 
@@ -380,13 +402,13 @@ async def run_scenario(
 	from nkqa.execution.scenario_runner import run_scenario as _run
 
 	if scenario_id.startswith(('http://', 'https://')) or '.' in scenario_id.split('/')[0]:
-		await ch.log(f'"{scenario_id}" looks like a URL. Freeform testing:  qa explore {scenario_id}')
+		await ch.log(f'"{scenario_id}" looks like a URL. Freeform testing:  kiwame explore {scenario_id}')
 		return 2
 	if not scenario_id:
 		return await list_scenarios(ws, ch)
 	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 	if s is None:
-		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
+		await ch.log(f'No scenario "{scenario_id}". See:  kiwame scenarios')
 		return 2
 	return await _run(ws, _cfg(ws, config), _hitl(ws, hitl, ch), ch, s, model, stop)
 
@@ -424,7 +446,7 @@ async def reflect(ws: Workspace, ch: Channel, run: str, config: Config | None = 
 
 	run_dir = ws.runs_dir / run
 	if not run_dir.is_dir():
-		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
+		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  kiwame list')
 		return 2
 	written = await _reflect(ws, _cfg(ws, config), ch, run_dir)
 	await ch.log(f'🧠 appmap updated: {", ".join(written)}' if written else 'Nothing new learned from this run.')
@@ -482,10 +504,39 @@ async def replay(
 	session_hitl = _hitl(ws, hitl, ch)
 	if all_runs:
 		return await replay_all(ws, session_hitl, ch, var or [])
+	from nkqa import library
+
+	# A Library test or folder: the recordings Claude runs left, replayed with no model.
+	if run and library.selected(ws, run):
+		return await library.replay(ws, session_hitl, ch, run)
 	history_file = await resolve_history_file(ws, ch, run)
 	if history_file is None:
 		return 2
 	return await _replay(ws, session_hitl, ch, history_file, var or [])
+
+
+async def library_list(ws: Workspace, ch: Channel) -> int:
+	from nkqa import library
+
+	tests = library.entries(ws)
+	if not tests:
+		await ch.log('The Library is empty. Save a passing run from the chat, or:  kiwame library-save <run>')
+		return 0
+	for t in tests:
+		await ch.log(f'{t["last_verdict"] or "—":<8} {t["id"]}  ({t["steps"]} steps)')
+	return 0
+
+
+async def library_replay(ws: Workspace, ch: Channel, target: str = '', hitl: HumanInTheLoop | None = None) -> int:
+	from nkqa import library
+
+	return await library.replay(ws, _hitl(ws, hitl, ch), ch, target)
+
+
+async def library_save(ws: Workspace, ch: Channel, run: str, hitl: HumanInTheLoop | None = None) -> int:
+	from nkqa import library
+
+	return await library.save(ws, _hitl(ws, hitl, ch), ch, run)
 
 
 async def file_bug(
@@ -497,7 +548,7 @@ async def file_bug(
 
 	run_dir = ws.runs_dir / run
 	if not run_dir.is_dir():
-		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  qa list')
+		await ch.log(f'No run "{run}" under {ws.runs_dir}/. See:  kiwame list')
 		return 2
 	record = read_results(run_dir)
 	if record is None:
@@ -545,7 +596,7 @@ async def file_bug(
 
 
 async def vault(ws: Workspace, ch: Channel, action: str = 'status', name: str = '', scenario: str = '') -> int:
-	"""`qa vault <action>` - one entry point over the same handlers the shell registers."""
+	"""`kiwame vault <action>` - one entry point over the same handlers the shell registers."""
 	from nkqa.hitl import HumanInTheLoop
 	from nkqa.shell.commands import REGISTRY, ShellContext
 	from nkqa.vault import Vault

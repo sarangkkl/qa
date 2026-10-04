@@ -1,6 +1,6 @@
-# nkqa — what it does and how to use it
+# Kiwame — what it does and how to use it
 
-nkqa is a QA teammate for a web app. It keeps a **notebook** about your app, writes **test
+Kiwame is the AI QA engineer for a web app. It keeps a **notebook** about your app, writes **test
 scenarios** you approve, runs them in a **real browser**, and keeps the **evidence** — verdict per
 step, screenshots, video.
 
@@ -8,7 +8,7 @@ Three ways to use it, all the same core:
 
 | surface | what it is |
 |---|---|
-| **MCP plugin** | your coding agent (Claude Code / Codex / Cursor) drives it. nkqa calls no model — the thinking runs on your existing subscription. |
+| **MCP plugin** | your coding agent (Claude Code / Codex / Cursor) drives it. Kiwame calls no model — the thinking runs on your existing subscription. |
 | **CLI** | `qa <verb>` in a terminal. Uses the models in `config.yaml` (needs an API key). |
 | **Interactive session** | `qa` alone: slash commands plus plain English. Same models. |
 | **Desktop app** | a window over the same server. |
@@ -38,6 +38,36 @@ agent drove it, via MCP).
 
 **Verdicts are deterministic.** Any `fail` → the run fails. Any `blocked`, or a step with no
 verdict → `blocked`. Never a silent pass. Exit codes: `0` pass, `1` fail, `2` usage/not-found.
+
+**Every expectation is proven by a check.** While it runs a scenario, the agent records a `check`
+for each EXPECT: text on the page, the URL, the title, an element or its text. A step cannot be
+marked `pass` without one. Names of things a test creates carry `{{unique}}` (e.g.
+`QA project {{unique}}`), which becomes a fresh stamp on every run, so reruns never collide.
+
+**Test cases you already have can be imported.** In the desktop chat, attach an Excel or CSV
+export (📎, or drop it on the chat). Claude shows how it reads the columns, asks about anything
+unclear, and drafts the rows as scenario cards, 20 per turn; say *next* for the following batch.
+Each draft keeps the original test case id, type and priority as tags, and the Module column
+becomes its folder (`Projects/Creation` → `projects/creation`). The sheet itself stays in
+`imports/`. Importing again is safe: ids that exist are skipped. Old `.xls` files need saving as
+`.xlsx` or CSV first.
+
+**The Library is the regression suite.** A run that passed can be **saved to the Library**, which
+is a human's call. It is kept only if its recording also replays once by itself. From then on it
+**replays with no model**: every recorded step is repeated, each element found again by its
+fingerprint (not its old position), and every check re-evaluated. A replay stops at the first
+thing that does not hold, and what to do about it (file a bug, re-record, remove) is the QA's
+call; nothing heals itself. The recording sits next to the scenario
+(`scenarios/<id>.recording.json`) and is bound to its approval: edit the scenario and it leaves
+the Library until it is recorded again. Folders are the scenario ids (`auth/login` is in `auth`).
+
+**Organising the Library** (desktop, human only): make folders and subfolders ahead of time (an
+empty one is a directory with a `.gitkeep`), drag a test onto a folder or use **Move to…**, and
+delete a test that is outdated. A move renames `scenarios/<id>.md` and its recording together;
+the approval does not include the id, so the test stays in the Library with no re-recording.
+Its earlier runs keep the old name, so "Last result" starts fresh until the next replay. Delete
+removes the scenario and its recording; its runs and evidence stay in `runs/`. A folder can only
+be deleted once nothing is left in it, drafts included.
 
 **Three gates that stay human.**
 
@@ -73,7 +103,8 @@ Install: see [INSTALL.md](INSTALL.md). Then talk normally, or use the three slas
 ### A normal session
 
 ```
-"set up nkqa for this app, it runs at https://dev.myapp.com"
+"set up Kiwame for this app, it runs at https://dev.myapp.com"
+# ^ also writes AGENTS.md and the MCP configs, so the next agent needs no explaining
 /nkqa:plan the login flow
 "show me what you drafted"
 "approve auth/login"            → dialog on your screen; you confirm
@@ -115,61 +146,64 @@ itself.
 
 | command | what it does |
 |---|---|
-| `qa init [--app-name N] [--base-url U]` | create the workspace layout here |
-| `qa learn <doc.md \| folder>` | build the appmap from an annotated doc (text + screenshots) |
-| `qa crawl [--pages N] [--refresh]` | read-only exploration that fills the appmap, writing each page as it finishes |
-| `qa correct "<what is actually true>"` | fix what the appmap gets wrong; shows a diff, commits it |
+| `kiwame init [--app-name N] [--base-url U]` | create the workspace layout here |
+| `kiwame learn <doc.md \| folder>` | build the appmap from an annotated doc (text + screenshots) |
+| `kiwame crawl [--pages N] [--refresh]` | read-only exploration that fills the appmap, writing each page as it finishes |
+| `kiwame correct "<what is actually true>"` | fix what the appmap gets wrong; shows a diff, commits it |
 
 ### Scenarios
 
 | command | what it does |
 |---|---|
-| `qa plan "<ask>" [--ticket KEY] [--area A] [--force]` | draft scenarios (no browser) |
-| `qa scenarios` | ids, state, last verdict |
-| `qa approve <id>` | review and approve — human only |
-| `qa revise <id> "<how>"` | rewrite a scenario; invalidates its approval |
+| `kiwame plan "<ask>" [--ticket KEY] [--area A] [--force]` | draft scenarios (no browser) |
+| `kiwame scenarios` | ids, state, last verdict |
+| `kiwame approve <id>` | review and approve — human only |
+| `kiwame revise <id> "<how>"` | rewrite a scenario; invalidates its approval |
 
 ### Running
 
 | command | what it does |
 |---|---|
-| `qa run <id> [--model M]` | execute an approved scenario |
-| `qa explore [url] [focus] [--name N]` | freeform testing, no scenario |
-| `qa replay <run> [--all]` | re-run a recording deterministically — no model, no cost |
-| `qa suite [tag] [--strict]` | run every approved scenario; one report for CI |
-| `qa compare [a] [b]` | what changed between two suite runs |
-| `qa list` | recorded runs |
-| `qa reflect <run>` | update the appmap from a past run (automatic after each run) |
+| `kiwame run <id> [--model M]` | execute an approved scenario |
+| `kiwame explore [url] [focus] [--name N]` | freeform testing, no scenario |
+| `kiwame replay <test \| folder \| run> [--all]` | replay a Library test or folder, or an old recorded run — no model, no cost |
+| `kiwame library` | list the Library, with each test's last result |
+| `kiwame library-replay [test \| folder]` | replay Library tests with no model; all of them when empty |
+| `kiwame library-save <run>` | keep a passing run as a Library test (human only; it must replay once first) |
+| `kiwame suite [tag] [--strict]` | run every approved scenario; one report for CI |
+| `kiwame compare [a] [b]` | what changed between two suite runs |
+| `kiwame list` | recorded runs |
+| `kiwame reflect <run>` | update the appmap from a past run (automatic after each run) |
 
 ### Credentials
 
 | command | what it does |
 |---|---|
-| `qa vault` | what this project needs, what is set, what is granted |
-| `qa vault-set <name>` | store one in the OS keychain (prompts; never an argument) |
-| `qa vault-rm <name>` | remove it and its grant |
-| `qa vault-grant <name> [--scenario S]` | let it be used without asking each time |
-| `qa vault-revoke <name>` | withdraw that |
+| `kiwame vault` | what this project needs, what is set, what is granted |
+| `kiwame vault-set <name>` | store one in the OS keychain (prompts; never an argument) |
+| `kiwame vault-rm <name>` | remove it and its grant |
+| `kiwame vault-grant <name> [--scenario S]` | let it be used without asking each time |
+| `kiwame vault-revoke <name>` | withdraw that |
 
 ### Jira
 
 | command | what it does |
 |---|---|
-| `qa connect jira --project KEY` | write the connector into `config.yaml` |
-| `qa auth jira [--reset]` | browser sign-in (needs Node.js) |
-| `qa ticket <KEY>` | read a ticket; writes nothing |
-| `qa file-bug <run> [--step N]` | compose a bug from a failed step; preview, then confirm |
+| `kiwame connect jira --project KEY` | write the connector into `config.yaml` |
+| `kiwame auth jira [--reset]` | browser sign-in (needs Node.js) |
+| `kiwame ticket <KEY>` | read a ticket; writes nothing |
+| `kiwame file-bug <run> [--step N]` | compose a bug from a failed step; preview, then confirm |
 
-After `qa connect`, restart your MCP client — the session caches `config.yaml` at startup.
+After `kiwame connect`, restart your MCP client — the session caches `config.yaml` at startup.
 
 ### Models and session
 
 | command | what it does |
 |---|---|
-| `qa models` | roles, providers, which API keys are present |
-| `qa set-model --provider anthropic\|openai [--smart ID] [--fast ID]` | point the tiers at a provider |
+| `kiwame models` | roles, providers, which API keys are present |
+| `kiwame set-model --provider anthropic\|openai [--smart ID] [--fast ID]` | point the tiers at a provider |
 | `qa mcp [--workspace DIR]` | serve all of this to Claude Code / Codex / Cursor |
-| `qa version` | versions |
+| `kiwame version` | versions |
 
 ---
 
@@ -195,6 +229,10 @@ reconnect. Ctrl+C cancels the running job; Ctrl+D leaves.
 ## 5. The workspace
 
 ```
+AGENTS.md         the QA role, read by any agent that opens this folder
+CLAUDE.md         a pointer to AGENTS.md
+.mcp.json         registers the Kiwame tools for Claude Code
+.cursor/mcp.json  the same, for Cursor
 config.yaml       app name, base URL, model roles, connectors
 vault.yaml        credential names, descriptions, origins — never values
 .env              API keys (gitignored)
@@ -205,6 +243,10 @@ runs/suite--*/    suite.md + suite.json for CI
 chats/            conversations, committed — the reasoning behind a scenario stays reviewable
 .nkqa/            machine-local, gitignored
 ```
+
+The first four are written when the workspace is created — never overwritten, since the folder
+is usually the app's own repo. Commit them and a teammate who clones it gets the same setup with
+nothing to install.
 
 `config.yaml` in brief:
 
@@ -231,9 +273,9 @@ run:
 
 appmap:
   auto_reflect: true    # learn from every run
-  crawl_pages: 15       # page budget for `qa crawl`
+  crawl_pages: 15       # page budget for `kiwame crawl`
 
-mcp:                    # extra tools; jira is written here by `qa connect jira`
+mcp:                    # extra tools; jira is written here by `kiwame connect jira`
   jira:
     command: npx
     args: ['-y', 'mcp-remote', 'https://mcp.atlassian.com/v1/sse']
@@ -244,7 +286,7 @@ Model names take two forms: browser-use style (`anthropic_claude_haiku_4_5`) or
 after this build is still reachable.
 
 Keys come from `.env` at startup: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
-`AZURE_OPENAI_KEY`. `qa models` tells you which are missing. **None of this is needed on the MCP
+`AZURE_OPENAI_KEY`. `kiwame models` tells you which are missing. **None of this is needed on the MCP
 path** — there your agent does the thinking.
 
 ---
@@ -252,19 +294,23 @@ path** — there your agent does the thinking.
 ## 6. CI
 
 ```
-qa suite --strict
+kiwame suite --strict
 ```
 Runs every approved scenario, writes `runs/suite--<stamp>/suite.{md,json}`, exits `0` or `1`.
-`qa compare` diffs the two newest suites, so a regression is visible as a change, not a wall of
-output. `qa replay --all` re-runs recordings with no model at all — free and repeatable.
+`kiwame compare` diffs the two newest suites, so a regression is visible as a change, not a wall of
+output. `kiwame library-replay` replays every Library test with no model at all — free and
+repeatable, which is what a release regression should be.
 
 ---
 
 ## 7. Limits worth knowing
 
-- Approval dialogs on the MCP path are **macOS only** right now. Elsewhere every gate denies.
+- The approval dialogs need a dialog tool: osascript (macOS), PowerShell (Windows) or `zenity`
+  (Linux — install it). Without one, Kiwame falls back to Tk, and failing that denies every gate,
+  which leaves it read-only.
 - One run at a time per workspace; one workspace per agent session.
-- `qa replay` cannot replay an MCP-driven run (`steps.json`) — your agent made those decisions,
-  there is no recorded model trace to re-execute.
+- An agent-driven run replays only once it is in the Library, since the Library is where its
+  recording is kept. A heavily dynamic page (virtualised lists, generated ids) can defeat the
+  element fingerprint; that shows up as a clear replay failure to re-record.
 - Jira needs Node.js, and the connector must be named exactly `jira`.
 - The testing agent can never file bugs on its own: Jira is not exposed to it during runs.

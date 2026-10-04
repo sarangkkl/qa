@@ -233,7 +233,7 @@ async def run_suite(
 
 	runnable, excluded = select(scenarios_mod.load_all(ws.scenarios_dir), tag)
 	if not runnable and not excluded:
-		await ch.log(f'No scenarios{f" tagged {tag}" if tag else ""}. Draft some:  qa plan "<what to test>"')
+		await ch.log(f'No scenarios{f" tagged {tag}" if tag else ""}. Draft some:  kiwame plan "<what to test>"')
 		return 2
 
 	started = datetime.now()
@@ -320,10 +320,10 @@ async def run_suite(
 
 
 async def compare_suites(ws: Workspace, ch: Channel, first: str = '', second: str = '') -> int:
-	"""`qa compare` - the two newest suites by default."""
+	"""`kiwame compare` - the two newest suites by default."""
 	dirs = suite_dirs(ws.runs_dir)
 	if len(dirs) < 2 and not (first and second):
-		await ch.log('Need two recorded suites to compare. Run:  qa suite')
+		await ch.log('Need two recorded suites to compare. Run:  kiwame suite')
 		return 2
 
 	def find(name: str) -> SuiteResult | None:

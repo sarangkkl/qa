@@ -13,14 +13,20 @@ export function Runs({
 	session,
 	busy,
 	hasJira,
+	focus,
 }: {
 	connection: Connection
 	runs: string[]
 	session: Session
 	busy: boolean
 	hasJira: boolean
+	/** A run a chat card asked to show. */
+	focus: string
 }) {
-	const [selected, setSelected] = useState('')
+	const [selected, setSelected] = useState(focus)
+	useEffect(() => {
+		if (focus) setSelected(focus)
+	}, [focus])
 	const [detail, setDetail] = useState<RunDetail | null>(null)
 	const [report, setReport] = useState('')
 	const [step, setStep] = useState(0)

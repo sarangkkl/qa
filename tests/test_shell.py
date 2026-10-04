@@ -153,7 +153,7 @@ def test_registry_covers_the_cli_surface() -> None:
 	# it could matter. The bar for adding to this set is that high - if a command could
 	# sensibly be typed at a terminal, it belongs in the CLI too.
 	session_only = {'mode'}
-	# the vault sub-actions are one CLI subcommand (`qa vault set`), several registry entries
+	# the vault sub-actions are one CLI subcommand (`kiwame vault set`), several registry entries
 	vault_subcommands = {name for name in REGISTRY if name.startswith('vault-')}
 	assert set(REGISTRY) - shell_only - session_only - vault_subcommands == cli_commands - cli_only
 

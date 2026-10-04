@@ -9,6 +9,7 @@
  * for those the log is the only progress there is.
  */
 
+import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { artifactUrl } from '../api/connection'
 import { StopButton } from '../components/StopButton'
@@ -24,6 +25,7 @@ export function LivePane({
 	stopping,
 	onStop,
 	onForce,
+	onClose,
 }: {
 	connection: Connection
 	frame: ImageFrame | null
@@ -32,6 +34,7 @@ export function LivePane({
 	stopping: string
 	onStop: (id: string) => void
 	onForce: () => void
+	onClose: () => void
 }) {
 	const last = jobs[jobs.length - 1]
 	const current = running ?? last
@@ -71,6 +74,9 @@ export function LivePane({
 				) : (
 					<span className="row-sub">{last?.cancelled ? '⏹ stopped' : 'idle'}</span>
 				)}
+				<button className="icon-btn" title="Hide (⌘J)" onClick={onClose}>
+					<X size={16} />
+				</button>
 			</div>
 
 			<div className="live-stage">

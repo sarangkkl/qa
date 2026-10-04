@@ -28,8 +28,8 @@ from nkqa.ui import Channel
 from nkqa.workspace import Workspace
 
 REFUSALS = {
-	'draft': 'is not approved yet. Review it, then:  qa approve {id}',
-	'stale': 'was EDITED after approval - the approval is stale. Re-review, then:  qa approve {id}',
+	'draft': 'is not approved yet. Review it, then:  kiwame approve {id}',
+	'stale': 'was EDITED after approval - the approval is stale. Re-review, then:  kiwame approve {id}',
 	'deprecated': 'is deprecated and will not run.',
 }
 
@@ -154,7 +154,7 @@ async def _execute(
 		f'\n{icon} {scenario.id}: {verdict.upper()}', scenario=scenario.id, verdict=verdict, run=run_dir.name
 	)
 	await ch.artifact(f'📄 Report:   {run_dir / "results.md"}', report=str(run_dir / 'results.md'))
-	await ch.log(f'▶️  Replay:   qa replay {run_dir.name}')
+	await ch.log(f'▶️  Replay:   kiwame replay {run_dir.name}')
 
 	# A stopped run does not teach the appmap: reflection is a fresh LLM call, and half a
 	# run is a misleading thing to learn from. write_results above still ran - the verdict

@@ -47,7 +47,7 @@ def diff_for(before: str, after: str, name: str) -> str:
 
 async def correct(ws: Workspace, config: Config, ch: Channel, instruction: str) -> int:
 	if not instruction.strip():
-		await ch.log('Tell me what is wrong, e.g.  qa correct "client rows are clickable, they open /clients/<id>"')
+		await ch.log('Tell me what is wrong, e.g.  kiwame correct "client rows are clickable, they open /clients/<id>"')
 		return 2
 	llm = resolve_llm(config, 'planner')
 	if llm is None:

@@ -93,7 +93,7 @@ def _messages(ws: Workspace, facts: str) -> list[BaseMessage]:
 
 
 async def reflect(ws: Workspace, config: Config, ch: Channel, run_dir: Path) -> list[str]:
-	"""Reflect on one run; returns written appmap files. Raises on real errors (qa reflect surfaces them)."""
+	"""Reflect on one run; returns written appmap files. Raises on real errors (kiwame reflect surfaces them)."""
 	llm = resolve_llm(config, 'reflector')
 	if llm is None:
 		return []

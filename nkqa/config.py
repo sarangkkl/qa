@@ -40,11 +40,11 @@ run:
 
 appmap:
   auto_reflect: true   # learn from every run (uses the 'reflector' model role)
-  crawl_pages: 15      # page budget for the optional `qa crawl`
+  crawl_pages: 15      # page budget for the optional `kiwame crawl`
 
 # MCP servers: extra tools for the product. Any server here can expose its tools to
 # the testing agent (expose_to_executor, default true) - except jira, which defaults
-# to false so bugs are only ever filed when a human runs `qa file-bug`.
+# to false so bugs are only ever filed when a human runs `kiwame file-bug`.
 # Secret env values use 'env:NAME' to read NAME from the environment/.env at launch.
 # mcp:
 #   jira:
@@ -56,7 +56,7 @@ appmap:
 #     env:
 #       SEED_KEY: env:SEED_KEY
 # jira:
-#   project: PROJ   # default project key for `qa file-bug`
+#   project: PROJ   # default project key for `kiwame file-bug`
 """
 
 
@@ -159,7 +159,7 @@ def add_mcp_server(text: str, name: str, command: str, args: list[str]) -> str:
 
 
 def set_jira_project(text: str, key: str) -> str:
-	"""Set `jira.project`, the default project key for `qa file-bug`.
+	"""Set `jira.project`, the default project key for `kiwame file-bug`.
 
 	Its own top-level block, NOT a field of `mcp.jira` - that is where `load()` reads it from
 	and where `file_bug` looks. Putting it in the wrong place parses fine and then fails only

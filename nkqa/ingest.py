@@ -116,7 +116,7 @@ async def learn(ws: Workspace, config: Config, ch: Channel, path_str: str) -> in
 		return 2
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
-		await ch.log("qa learn needs a real (multimodal) model: set models.planner in config.yaml (e.g. 'smart').")
+		await ch.log("kiwame learn needs a real (multimodal) model: set models.planner in config.yaml (e.g. 'smart').")
 		return 2
 
 	await ch.log(f'📚 Ingesting {path.name}: {len(text)} chars of text, {len(images)} screenshot(s)...')
@@ -132,7 +132,8 @@ async def learn(ws: Workspace, config: Config, ch: Channel, path_str: str) -> in
 	if written:
 		committed = ' (git-committed)' if appmap.in_git_repo(ws) else ''
 		await ch.log(
-			f'\n{len(written)} appmap file(s) updated{committed}. Review:  git diff appmap/  ·  Plan:  qa plan "<ask>"'
+			f'\n{len(written)} appmap file(s) updated{committed}. '
+			'Review:  git diff appmap/  ·  Plan:  kiwame plan "<ask>"'
 		)
 	else:
 		await ch.log('The document produced no appmap changes.')

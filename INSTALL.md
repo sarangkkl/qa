@@ -1,19 +1,19 @@
-# nkqa — install and use it from Claude Code
+# Kiwame — install and use it from Claude Code
 
-nkqa turns your coding agent into a QA engineer for your web app. It plans test scenarios,
+Kiwame turns your coding agent into a QA engineer for your web app. It plans test scenarios,
 runs them in a real browser, records video and screenshots, and tells you what broke.
-**It uses your existing Claude Code subscription** — nkqa itself never calls a model.
+**It uses your existing Claude Code subscription** — Kiwame itself never calls a model.
 
 You stay in control: every scenario is approved by you, every risky action (delete, pay,
-send) asks you first, and passwords are typed by nkqa inside the browser — the agent never
+send) asks you first, and passwords are typed by Kiwame inside the browser — the agent never
 sees them. Those prompts appear as native dialogs on your screen.
 
 ## What you need
 
 - **Claude Code** (any plan).
-- **uv** — installs and runs nkqa for you. One line, once:
+- **uv** — installs and runs Kiwame for you. One line, once:
   `curl -LsSf https://astral.sh/uv/install.sh | sh` (Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`)
-- **Google Chrome** on the machine (the browser nkqa drives).
+- **Google Chrome** on the machine (the browser Kiwame drives).
 - macOS for the approval dialogs. (Linux/Windows: dialogs are not available yet, so
   approvals and credentials can't be granted there.)
 
@@ -24,14 +24,14 @@ sees them. Those prompts appear as native dialogs on your screen.
 /plugin install nkqa@nkqa
 ```
 
-Restart Claude Code. The first time it starts, `uv` downloads nkqa and its dependencies
-(about a minute). After that it's instant. Type `/mcp` — you should see **nkqa** connected.
+Restart Claude Code. The first time it starts, `uv` downloads Kiwame and its dependencies
+(about a minute). After that it's instant. Type `/mcp` — you should see **nkqa** (Kiwame's tools) connected.
 
 ## First use
 
 Open Claude Code **in the folder of the app you want to test** and say:
 
-> set up nkqa for this app, it runs at https://dev.myapp.com
+> set up Kiwame for this app, it runs at https://dev.myapp.com
 
 The agent creates a `qa/` workspace-style layout in that folder (`config.yaml`, `appmap/`,
 `scenarios/`, `runs/`). Then:
@@ -75,7 +75,7 @@ Cursor: add to `.cursor/mcp.json`
 
 ## Troubleshooting
 
-- **nkqa doesn't show in `/mcp`** → `uv` isn't on your PATH. Open a new terminal after
+- **`nkqa` doesn't show in `/mcp`** → `uv` isn't on your PATH. Open a new terminal after
   installing it, then restart Claude Code.
 - **"is not approved yet"** → you haven't approved that scenario; say "approve <id>".
 - **A dialog never appeared** → check for a window behind others; a dialog nobody answers
