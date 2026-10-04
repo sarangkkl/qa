@@ -194,7 +194,7 @@ export function Chat({
 					<div className="drop-overlay">
 						<FileSpreadsheet size={28} />
 						<strong>Drop to attach test cases</strong>
-						<span className="row-sub">.xlsx, .csv or .tsv — Claude imports them as scenarios</span>
+						<span className="row-sub">.xlsx, .csv or .tsv — Kiwame imports them as scenarios</span>
 					</div>
 				)}
 				<header className="chat-head">
@@ -215,7 +215,7 @@ export function Chat({
 							<div className="chat-empty">
 								<h2>What should we test?</h2>
 								<p className="row-sub">
-									Claude reads the app map, drafts scenarios for you to approve, and runs them in a real browser.
+									Kiwame reads the app map, drafts scenarios for you to approve, and runs them in a real browser.
 								</p>
 								{suggestions.map((s) => (
 									<button key={s} className="suggestion" disabled={busy || !canRun} onClick={() => onSay(s)}>
@@ -264,7 +264,7 @@ export function Chat({
 						onStop={() => mine && onStop(mine.id)}
 						running={thinking}
 						disabled={busy || !canRun}
-						hint={busy && !thinking ? 'Waiting for the current job to finish…' : 'Ask Claude to plan, run or explore…'}
+						hint={busy && !thinking ? 'Waiting for the current job to finish…' : 'Ask Kiwame to plan, run or explore…'}
 					/>
 				</div>
 			</div>

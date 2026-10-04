@@ -27,7 +27,7 @@ export const health = (c: Connection, recheck = false) => get<Health>(c, `/healt
 export const workspace = (c: Connection) => get<WorkspaceState>(c, '/workspace')
 export const scenario = (c: Connection, id: string) => get<ScenarioDetail>(c, `/scenarios/${id}`)
 export const run = (c: Connection, name: string) => get<RunDetail>(c, `/runs/${encodeURIComponent(name)}`)
-export const library = (c: Connection) => get<{ tests: LibraryTest[] }>(c, '/library')
+export const library = (c: Connection) => get<{ tests: LibraryTest[]; folders: string[] }>(c, '/library')
 export const chats = (c: Connection) => get<{ chats: ChatSummary[] }>(c, '/chats')
 export const chat = (c: Connection, id: string) => get<ChatDetail>(c, `/chats/${encodeURIComponent(id)}`)
 
@@ -80,3 +80,23 @@ export async function uploadImport(c: Connection, file: File): Promise<Imported>
 	}
 	return (await response.json()) as Imported
 }
+
+/** Library housekeeping. The error carries the server's reason ("still holds 2 scenarios…"). */
+async function send<T>(c: Connection, method: 'POST' | 'DELETE', path: string, query: Record<string, string>): Promise<T> {
+	const response = await fetch(`${httpBase(c)}${path}?${new URLSearchParams(query)}`, {
+		method,
+		headers: { Authorization: `Bearer ${c.token}` },
+	})
+	if (!response.ok) {
+		const detail = (await response.json().catch(() => null)) as { detail?: string } | null
+		throw new Error(detail?.detail ?? `${path} → ${response.status}`)
+	}
+	return (await response.json()) as T
+}
+
+export const moveTest = (c: Connection, id: string, folder: string) =>
+	send<{ id: string }>(c, 'POST', '/library/move', { id, folder })
+export const deleteTest = (c: Connection, id: string) => send<unknown>(c, 'DELETE', '/library/tests', { id })
+export const createFolder = (c: Connection, parent: string, name: string) =>
+	send<{ path: string }>(c, 'POST', '/library/folders', { parent, name })
+export const deleteFolder = (c: Connection, path: string) => send<unknown>(c, 'DELETE', '/library/folders', { path })

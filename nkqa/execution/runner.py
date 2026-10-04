@@ -1,4 +1,4 @@
-"""Freeform AI-driven recording - `qa explore`."""
+"""Freeform AI-driven recording - `kiwame explore`."""
 
 # browser-use boundary: its internals are partially untyped, so the Unknown family is off here.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
@@ -160,7 +160,7 @@ async def _record(
 				f'\n📼 Transcript: {run_dir / "conversation"}/', conversation=str(run_dir / 'conversation')
 			)
 			await ch.artifact(f'📄 Recording:  {run_dir / "history.json"}', history=str(run_dir / 'history.json'))
-			await ch.log(f'▶️  Replay it anytime WITHOUT the LLM:  qa replay {name}')
+			await ch.log(f'▶️  Replay it anytime WITHOUT the LLM:  kiwame replay {name}')
 			await ch.log('🎬 The video file is finalized only now - open it AFTER this message, not mid-run.')
 		else:
 			await ch.log('\nNo step completed, so there is nothing to save for this test.')

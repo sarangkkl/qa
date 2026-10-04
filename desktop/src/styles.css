@@ -210,6 +210,8 @@ a { color: var(--accent); }
 .modal-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 
 .picker { max-width: 620px; margin: 12vh auto; padding: 0 24px; display: flex; flex-direction: column; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 12px; margin: 0; }
+.opening { display: flex; align-items: center; gap: 8px; color: var(--dim); margin: 0; }
 .field { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .field span { font-size: 12px; color: var(--dim); }
 .field input, .field select { background: var(--input); border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; color: inherit; font: inherit; }
@@ -240,10 +242,21 @@ a { color: var(--accent); }
 .ticket-plan input { flex: 1; min-width: 0; background: var(--input); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; color: inherit; font: inherit; }
 .plan-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .plan-bar-label { flex: 1; min-width: 140px; font-weight: 600; }
-.tree-row { padding-top: 5px; padding-bottom: 5px; }
+.tree-row { padding-top: 5px; padding-bottom: 5px; width: 100%; min-width: 0; }
 .tree-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tree-label .row-clip { flex: 1; }
 .tree-count { margin-left: auto; }
+.tree-line { display: flex; align-items: center; border-radius: 6px; }
+.tree-line > .row { flex: 1; min-width: 0; }
+.tree-line:hover { background: var(--panel-2); }
+.tree-actions { display: none; padding-right: 4px; }
+.tree-line:hover .tree-actions, .tree-line.row-selected .tree-actions { display: flex; }
+.tree-drop, .tree-drop:hover { outline: 1px dashed var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tree-input { background: var(--input); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; color: inherit; font: inherit; margin: 2px 4px 2px 0; }
+.tree-problem { margin: 0 6px 6px; font-size: 12px; }
+.detail-actions select { background: var(--input); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: inherit; font: inherit; max-width: 200px; }
+.confirm-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--bad); border-radius: 8px; }
+.confirm-bar span { flex: 1; min-width: 200px; }
 .grid-link { cursor: pointer; }
 .grid-link:hover td { background: var(--panel-2); }
 .library-summary { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding-top: 14vh; color: var(--dim); }

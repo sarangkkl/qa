@@ -2,7 +2,7 @@
 
 Values live in the OS keychain, never in the workspace - the workspace is git-tracked and
 meant to be shared. What the workspace *does* carry is `vault.yaml`: the names, what they
-are for, and which origin each is bound to. Clone the repo, run `qa vault status`, and you
+are for, and which origin each is bound to. Clone the repo, run `kiwame vault status`, and you
 are told exactly what you must supply before anything can run.
 
 Two independent gates stop a credential reaching the wrong page:
@@ -34,7 +34,7 @@ ENV_PREFIX = 'NKQA_SECRET_'
 
 VAULT_TEMPLATE = """\
 # What credentials this project needs. Names and origins only - never values.
-# Values live in your OS keychain (`qa vault set <name>`) or, for CI, in
+# Values live in your OS keychain (`kiwame vault set <name>`) or, for CI, in
 # NKQA_SECRET_<NAME> environment variables.
 #
 # `origin` binds a credential to one site: the agent cannot pull it out of the keychain

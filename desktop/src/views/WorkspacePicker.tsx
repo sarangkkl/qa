@@ -5,6 +5,7 @@
  * lives in `nkqa/workspace.py` and nowhere else.
  */
 
+import { LoaderCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { inTauri, pickWorkspace, recentWorkspaces, type InitOptions } from '../api/connection'
 
@@ -116,10 +117,17 @@ export function WorkspacePicker({
 
 	return (
 		<div className="picker">
-			<h1>nkqa</h1>
-			<p className="row-sub">An AI QA teammate. Open a workspace to begin.</p>
+			<h1 className="brand">
+				<img src="/kiwame-mark.svg" alt="" width={44} height={44} />
+				Kiwame
+			</h1>
+			<p className="row-sub">The AI QA engineer that knows your app end to end. Open a workspace to begin.</p>
 			{(error || pickError) && <p className="error">{error || pickError}</p>}
-			{busy && <p className="row-sub">Starting the sidecar — first launch unpacks it, so give it up to a minute…</p>}
+			{busy && (
+				<p className="opening">
+					<LoaderCircle size={16} className="spin" /> Opening your workspace…
+				</p>
+			)}
 
 			{inTauri() ? (
 				<>

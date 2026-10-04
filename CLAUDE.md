@@ -1,6 +1,6 @@
-# NKQA — rules for working in this repo
+# Kiwame — rules for working in this repo
 
-Product: CLI-first AI QA teammate. Design: docs/ARCHITECTURE.md. Current work: docs/PHASE-1-PLAN.md.
+Product: Kiwame, the AI QA engineer (internal package and ids are still `nkqa`; the brand is Kiwame). Design: docs/ARCHITECTURE.md. Current work: docs/PHASE-1-PLAN.md.
 This repo is the product, NOT the browser-use library (that comes from pip, see venv/).
 
 ## Coding style & guidelines

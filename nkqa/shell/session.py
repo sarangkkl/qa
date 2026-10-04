@@ -60,7 +60,7 @@ async def handle(ctx: ShellContext, line: str) -> int:
 async def start() -> int:
 	ws = workspace_mod.find()
 	if ws is None:
-		print('Not inside a QA workspace. Create one first:  qa init')
+		print('Not inside a QA workspace. Create one first:  kiwame init')
 		return 2
 	channel = TerminalChannel()
 	ctx = ShellContext(

@@ -42,7 +42,7 @@ export function StopButton({
 			</button>
 			<button
 				className={confirming ? 'danger' : ''}
-				title="Kills the sidecar. Loses this session's credentials, any pending prompt, and the video."
+				title="Stops Kiwame's background server. Loses this session's credentials, any pending prompt, and the video."
 				onClick={() => (confirming ? onForce() : setConfirming(true))}
 			>
 				{confirming ? 'Click again to force' : 'Force'}

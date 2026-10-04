@@ -133,7 +133,7 @@ async def plan(
 	if output.notes:
 		await ch.log(f'\n🗒️  Planner notes: {output.notes}')
 	if written:
-		await ch.log(f'\nReview the files under {ws.scenarios_dir}/, edit freely, then:  qa approve <id>')
+		await ch.log(f'\nReview the files under {ws.scenarios_dir}/, edit freely, then:  kiwame approve <id>')
 	else:
 		await ch.log('\nNothing new to draft.')
 	return 0

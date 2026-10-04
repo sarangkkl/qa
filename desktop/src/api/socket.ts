@@ -62,7 +62,7 @@ export class Session {
 			this.failInFlight('the connection dropped')
 			if (!this.closed) this.retry = setTimeout(() => this.open(), RETRY_MS)
 		}
-		socket.onerror = () => this.handlers.onStatus?.(false, 'cannot reach the sidecar')
+		socket.onerror = () => this.handlers.onStatus?.(false, "cannot reach Kiwame's background server")
 	}
 
 	private failInFlight(reason: string): void {

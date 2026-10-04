@@ -69,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
 	# Only meaningful with --init. Never put a secret on argv: it is world-readable via `ps`.
 	parser.add_argument('--app-name', default='', help='with --init: app name for config.yaml')
 	parser.add_argument('--base-url', default='', help='with --init: base URL for config.yaml')
+	# The desktop starts one of these when the app opens: by the time the human picks a workspace
+	# everything is loaded (and macOS has checked every library), so opening it is instant.
+	parser.add_argument(
+		'--standby',
+		action='store_true',
+		help='load everything, print {"standby": true}, then read {"workspace", "init"} as one JSON line on stdin',
+	)
 	parser.add_argument(
 		'--exit-with-parent',
 		action='store_true',
@@ -94,8 +101,31 @@ def create_or_fail(root: Path, app_name: str, base_url: str) -> str:
 	return ''
 
 
+def take_request(args: argparse.Namespace) -> None:
+	"""--standby: say we are loaded, then take the workspace from the one line the shell sends.
+
+	Bytes, not sys.stdin: the text layer reads ahead, and the EOF watcher (--exit-with-parent)
+	reads the same pipe afterwards.
+	"""
+	print(json.dumps({'standby': True}), flush=True)
+	line = sys.stdin.buffer.readline()
+	if not line:
+		sys.exit(0)  # the app quit before it needed us
+	try:
+		request = json.loads(line)
+		args.workspace = str(request['workspace'])
+	except (ValueError, KeyError, TypeError):
+		print(json.dumps({'ready': False, 'error': 'bad standby request'}), flush=True)
+		sys.exit(2)
+	init = request.get('init') or None
+	if init:
+		args.init, args.app_name, args.base_url = True, str(init.get('app_name', '')), str(init.get('base_url', ''))
+
+
 def main() -> None:
 	args = build_parser().parse_args()
+	if args.standby:
+		take_request(args)  # the module-level imports above already did the slow part
 	root = Path(args.workspace).expanduser().resolve()
 
 	if args.init and workspace_mod.at(root) is None:

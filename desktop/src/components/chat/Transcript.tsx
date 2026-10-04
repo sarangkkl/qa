@@ -75,7 +75,7 @@ export function toItems(messages: ClaudeMessage[]): Item[] {
 	const items: Item[] = []
 	for (const m of messages) {
 		if (m.type === 'result' && m.is_error) {
-			items.push({ kind: 'error', text: m.result || 'Claude stopped with an error.' })
+			items.push({ kind: 'error', text: m.result || 'Kiwame stopped with an error.' })
 			continue
 		}
 		if (m.type !== 'user' && m.type !== 'assistant') continue
@@ -307,7 +307,7 @@ export function ScenarioCard({
 					<button
 						className={state === 'ok' ? 'primary' : ''}
 						disabled={busy || state !== 'ok' || !canRun}
-						title={state === 'ok' ? 'Claude runs it in a real browser' : 'Only an approved scenario can run'}
+						title={state === 'ok' ? 'Kiwame runs it in a real browser' : 'Only an approved scenario can run'}
 						onClick={() => onRun([id])}
 					>
 						<Play size={14} /> Run

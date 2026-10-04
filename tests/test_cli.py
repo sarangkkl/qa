@@ -54,7 +54,7 @@ def test_init_warns_when_the_folder_already_had_its_own_claude_md(tmp_path: Path
 
 
 def test_mcp_is_a_workspace_free_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-	"""`qa mcp` must start outside a workspace (the agent picks one later), but a --workspace
+	"""`kiwame mcp` must start outside a workspace (the agent picks one later), but a --workspace
 	that is not one is a usage error, like every other bad argument."""
 	args = cli.build_parser().parse_args(['mcp', '--workspace', 'x'])
 	assert args.command == 'mcp' and args.workspace == 'x'

@@ -90,6 +90,7 @@ export default function App() {
 	const [sideOpen, setSideOpen] = useState(() => remembered(SIDE_KEY, true))
 	const [liveOpen, setLiveOpen] = useState(false)
 	const [library, setLibrary] = useState<LibraryTest[]>([])
+	const [folders, setFolders] = useState<string[]>([])
 	// What the Library or Runs view should show when a chat card says "Open" or "Evidence".
 	const [focus, setFocus] = useState('')
 	const [runFocus, setRunFocus] = useState('')
@@ -133,7 +134,10 @@ export default function App() {
 		api.health(connection).then(setHealth).catch(() => undefined)
 		api
 			.library(connection)
-			.then((r) => setLibrary(r.tests))
+			.then((r) => {
+				setLibrary(r.tests)
+				setFolders(r.folders)
+			})
 			.catch(() => setLibrary([]))
 	}, [connection])
 
@@ -403,7 +407,15 @@ export default function App() {
 					/>
 				)}
 				{tab === 'library' && (
-					<Library connection={connection} tests={library} busy={busy} focus={focus} onReplay={replay} />
+					<Library
+						connection={connection}
+						tests={library}
+						folders={folders}
+						busy={busy}
+						focus={focus}
+						onReplay={replay}
+						onChanged={refresh}
+					/>
 				)}
 				{tab === 'appmap' && <AppMap connection={connection} files={state.appmap} flowsOnly={false} />}
 				{tab === 'flows' && <AppMap connection={connection} files={state.appmap} flowsOnly={true} />}
@@ -440,7 +452,7 @@ export default function App() {
 				<span className="status-clip" title={state.root}>
 					{state.app_name || 'workspace'}
 				</span>
-				{running && <span className="status-run">● {running.name === 'say' ? 'Claude is working' : running.name}</span>}
+				{running && <span className="status-run">● {running.name === 'say' ? 'Kiwame is working' : running.name}</span>}
 				<span className="status-grow" />
 				{health?.claude?.path && (
 					<span title={health.claude.path}>

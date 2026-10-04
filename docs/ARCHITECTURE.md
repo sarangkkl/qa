@@ -1,4 +1,4 @@
-# NKQA — Architecture
+# Kiwame — Architecture
 
 **One sentence:** A CLI-first AI QA teammate ("Claude Code for QA") that lives in a git
 workspace: it plans test scenarios as reviewable files, executes only what a human has
@@ -67,10 +67,10 @@ preconditions:
 - Real payment capture (permission-gated; not granted for this scenario).
 ```
 
-Lifecycle: `qa plan` writes drafts → human reviews/edits (PR is the intended review
-surface) → `qa approve` records approval **bound to a content hash** of the scenario
+Lifecycle: `kiwame plan` writes drafts → human reviews/edits (PR is the intended review
+surface) → `kiwame approve` records approval **bound to a content hash** of the scenario
 (any later edit invalidates it; the runner refuses stale approvals until re-approved) →
-`qa run` executes → evidence folder created under `runs/`, with `results.md` linking
+`kiwame run` executes → evidence folder created under `runs/`, with `results.md` linking
 video/screenshots to specific step numbers → post-run reflection updates `appmap/` (§5).
 
 ## 4. Agents and their roles
@@ -146,7 +146,7 @@ raw Confluence pages), but its output is distilled markdown; the appmap stays th
 system of record.
 
 Appmap writers (all funnel into the same files): manual authoring (final authority) →
-learn-from-runs (Reflector) → autonomous onboarding crawl (`qa init --crawl`) → docs
+learn-from-runs (Reflector) → autonomous onboarding crawl (`kiwame init --crawl`) → docs
 ingestion (Confluence/PRDs, last).
 
 ### A crawl writes as it goes
@@ -172,7 +172,7 @@ an identity provider is not part of the product.
 **The skip list is the map itself.** `known_routes()` reads the `**Route:**` line back out of
 `appmap/pages/*.md`, so it cannot drift from what is actually written, and a page a human
 wrote by hand counts as known. A documented route is skipped rather than overwritten — this
-is what makes "the human edit wins" structural instead of advisory. `qa crawl --refresh`
+is what makes "the human edit wins" structural instead of advisory. `kiwame crawl --refresh`
 re-maps everything when the app has genuinely changed. Human-written template routes
 (`/projects/{projectNumber}/{tab}`) cover their instances, so a hand-documented screen is not
 re-mapped the moment the crawler sees a real id in the URL.
@@ -184,7 +184,7 @@ does the clients page do?" is answered from what is written rather than guessed.
 budget, files are named but not loaded, so the agent can say a page doc exists that it has
 not read — better than implying the app has nothing else.
 
-`qa correct "<what is actually true>"` is the write half. Every other appmap writer takes a
+`kiwame correct "<what is actually true>"` is the write half. Every other appmap writer takes a
 path, a run name or a page budget; none of them takes a sentence, so correcting the agent
 meant opening the file yourself. It shows a diff, then writes through the same
 `appmap.apply()` as everything else — sandboxed, and committed as `appmap: corrected by you`,
@@ -207,12 +207,12 @@ aliases:
 ```
 
 Override precedence (Claude Code feel): config default → CLI flag
-(`qa run checkout --model smart`) → in-session `/model` switch.
+(`kiwame run checkout --model smart`) → in-session `/model` switch.
 `calculate_cost=True` reports cost per role in `results.md`.
 
 ### Changing it without editing YAML
 
-`qa set-model --provider anthropic|openai [--smart ID] [--fast ID]`, the same command the
+`kiwame set-model --provider anthropic|openai [--smart ID] [--fast ID]`, the same command the
 desktop Settings page runs, **edits the two aliases and not the five roles.** That is the
 whole reason the indirection exists: one edit moves every role and the smart/fast split
 survives. Collapsing all five onto one model makes every run either slow or dim. A role
@@ -231,7 +231,7 @@ the provider as typed, so a model released after a build is still reachable.
 
 **Keys are not part of this.** `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` are read from the
 workspace `.env` at launch, so switching provider needs a reopen if the new key was not
-already there. `qa models` (and `/health`) is what reports a missing one; `set-model`
+already there. `kiwame models` (and `/health`) is what reports a missing one; `set-model`
 succeeds regardless, because "the change did not apply" and "the key is not set yet" are
 different failures and must not be reported as the same one.
 
@@ -261,9 +261,9 @@ mcp:
 ```
 
 **Jira scope in v1 (deliberately narrow):**
-- **Read stories to plan from:** `qa plan --ticket PROJ-123` pulls the story +
+- **Read stories to plan from:** `kiwame plan --ticket PROJ-123` pulls the story +
   acceptance criteria and drafts scenarios against them.
-- **Instructed bug filing only:** `qa file-bug <finding-id>` files a bug with evidence
+- **Instructed bug filing only:** `kiwame file-bug <finding-id>` files a bug with evidence
   attached — only when the human says so. No autonomous filing, no Xray/Zephyr
   test-cycle management.
 
@@ -273,26 +273,26 @@ Shipped (Phases 1–4), plus the shell that fronts them (Phase 5):
 
 ```
 qa                         # interactive session: slash commands + natural language
-qa init                    # create the workspace (migrates old prototype recordings)
-qa learn <doc.md|folder>   # build the appmap from an annotated doc (text + screenshots)
-qa plan "<ask>" [--ticket PROJ-123]     # draft scenarios (status: draft)
-qa scenarios               # ids, status (draft/approved/STALE), last verdict
-qa approve <id>            # hash-bound approval; human keystroke, never the agent
-qa revise <id> "<how>"     # rewrite a scenario (invalidates its approval)
-qa run <id>                # execute an approved scenario -> per-step verdicts + evidence
-qa explore [url] [focus]   # freeform AI-driven testing, no scenario
-qa replay <run> [--all]    # deterministic re-run from history, no LLM
-qa reflect <run>           # appmap learns from a run (automatic after every run)
-qa crawl [--pages N] [--refresh]   # read-only exploration; skips pages already mapped
-qa correct "<what is true>"        # fix what the app map gets wrong, in your own words
-qa suite [--tag T] [--strict]           # run every approved scenario -> one CI report
-qa compare [a] [b]                      # what changed between two suite runs
-qa vault [status|set|rm|grant|revoke]   # stored credentials and their grants
-qa connect jira [--project KEY]         # write the connector into config.yaml
-qa auth [server] [--reset]              # OAuth sign-in for a configured connector
-qa list / qa models        # recorded runs · model roles, providers, key presence
-qa set-model --provider anthropic|openai [--smart ID] [--fast ID]   # point the tiers at a provider
-qa file-bug <run> [--step N]            # push a finding to Jira with repro + evidence
+kiwame init                    # create the workspace (migrates old prototype recordings)
+kiwame learn <doc.md|folder>   # build the appmap from an annotated doc (text + screenshots)
+kiwame plan "<ask>" [--ticket PROJ-123]     # draft scenarios (status: draft)
+kiwame scenarios               # ids, status (draft/approved/STALE), last verdict
+kiwame approve <id>            # hash-bound approval; human keystroke, never the agent
+kiwame revise <id> "<how>"     # rewrite a scenario (invalidates its approval)
+kiwame run <id>                # execute an approved scenario -> per-step verdicts + evidence
+kiwame explore [url] [focus]   # freeform AI-driven testing, no scenario
+kiwame replay <run> [--all]    # deterministic re-run from history, no LLM
+kiwame reflect <run>           # appmap learns from a run (automatic after every run)
+kiwame crawl [--pages N] [--refresh]   # read-only exploration; skips pages already mapped
+kiwame correct "<what is true>"        # fix what the app map gets wrong, in your own words
+kiwame suite [--tag T] [--strict]           # run every approved scenario -> one CI report
+kiwame compare [a] [b]                      # what changed between two suite runs
+kiwame vault [status|set|rm|grant|revoke]   # stored credentials and their grants
+kiwame connect jira [--project KEY]         # write the connector into config.yaml
+kiwame auth [server] [--reset]              # OAuth sign-in for a configured connector
+kiwame list / kiwame models        # recorded runs · model roles, providers, key presence
+kiwame set-model --provider anthropic|openai [--smart ID] [--fast ID]   # point the tiers at a provider
+kiwame file-bug <run> [--step N]            # push a finding to Jira with repro + evidence
 qa mcp [--workspace DIR]                # serve all of the above to Claude Code / Codex / Cursor (§12)
 ```
 
@@ -303,15 +303,15 @@ qa mcp [--workspace DIR]                # serve all of the above to Claude Code 
 2. **Plan → approve → run loop** — scenario schema, planner agent, approval gate,
    per-scenario evidence with step-linked `results.md`. *The differentiator; sellable
    as a demo on its own.*
-3. **MCP + Jira read** — MCP client wiring, `qa plan --ticket`, instructed
-   `qa file-bug`.
+3. **MCP + Jira read** — MCP client wiring, `kiwame plan --ticket`, instructed
+   `kiwame file-bug`.
 4. **App map** — cheapest sources first: manual + learn-from-runs, then
-   `qa init --crawl`, docs ingestion last. *The compounding moat.*
+   `kiwame init --crawl`, docs ingestion last. *The compounding moat.*
 5. **Interactive shell** — `qa` with no arguments opens a Claude-Code-style session:
    slash commands + natural language over the commands above. *The product's face.*
    The chat agent can never approve — that stays a human keystroke.
 6. **Suite & CI polish** — tag suites, run-over-run comparison, stuck-escalation,
-   selector auto-healing. *Shipped: `qa suite`, `qa compare`, and the vault that makes an
+   selector auto-healing. *Shipped: `kiwame suite`, `kiwame compare`, and the vault that makes an
    unattended run possible. Stuck-escalation and selector auto-healing remain open, and
    deliberately so — both need a signal only real runs can provide (§6).*
 
@@ -352,9 +352,9 @@ writing to the same terminal.
 - Vector database as system of record
 - Autonomous bug filing without human instruction
 
-## 12. nkqa as an MCP server (LLM-free)
+## 12. Kiwame as an MCP server (LLM-free)
 
-§7 makes the testing agent an MCP *client*. `qa mcp` is the other direction: nkqa is the
+§7 makes the testing agent an MCP *client*. `qa mcp` is the other direction: Kiwame is the
 server, and the user's own coding agent - Claude Code, Codex, Cursor, anything that speaks
 MCP over stdio - is both the brain and the hands. **Nothing on this path calls a model.**
 The planner, executor, reflector and chat roles are simply not used; the agent reads the
@@ -401,8 +401,8 @@ What does not change:
   the transport is handed the real stream explicitly, so a stray print can never corrupt a frame.
 
 Evidence: a driven run writes `steps.json` (every action with params - placeholders unresolved -
-URL before/after, result, error, `steps/step-NNN.png`) instead of `history.json`. `qa list`,
-`/runs/{name}` and `reflector.run_facts` read either; `qa replay` refuses a steps-only run,
+URL before/after, result, error, `steps/step-NNN.png`) instead of `history.json`. `kiwame list`,
+`/runs/{name}` and `reflector.run_facts` read either; `kiwame replay` refuses a steps-only run,
 because the external agent made every decision and there is nothing browser-use could rerun.
 `Vault(ws)` is mandatory in the session for the same reason as in the sidecar: without it the
 release chain short-circuits.

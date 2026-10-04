@@ -1,6 +1,6 @@
 """Optional appmap enrichment: a browser agent explores the app read-only.
 
-Not the onboarding path (that's `qa learn` with an annotated doc) - this verifies and
+Not the onboarding path (that's `kiwame learn` with an annotated doc) - this verifies and
 extends the map against the live app. 2FA is fine: ask_credential collects OTPs live.
 """
 
@@ -148,7 +148,7 @@ async def crawl(
 	refresh: bool = False,
 ) -> int:
 	if not config.base_url:
-		await ch.log('qa crawl needs app.base_url in config.yaml.')
+		await ch.log('kiwame crawl needs app.base_url in config.yaml.')
 		return 2
 	stop = stop or StopSignal()
 	run_dir = ws.runs_dir / f'crawl--{datetime.now():%Y%m%d-%H%M%S}'
@@ -158,7 +158,7 @@ async def crawl(
 	recorder = PageRecorder(ws, ch, config, pages, refresh)
 	if recorder.known:
 		await ch.log(f'📚 Already mapped, skipping {len(recorder.known)}: {", ".join(sorted(recorder.known))}')
-		await ch.log('   Re-map them with:  qa crawl --refresh\n')
+		await ch.log('   Re-map them with:  kiwame crawl --refresh\n')
 	tools = hitl.build_tools()
 	recorder.register(tools)
 

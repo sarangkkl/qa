@@ -89,7 +89,8 @@
       "Bash(/Users/gaurav/Documents/dreams/nkqa/nkqa-public/venv/bin/python -c \"import nkqa; print\\(nkqa.__file__\\)\")",
       "Bash(rm -rf /private/tmp/claude-501/-Users-gaurav-Documents-dreams-nkqa-browser-use/8ede50a2-f6b6-413c-9b83-df34d77b4d62/scratchpad/agentfiles)",
       "Bash(sed -n '/What a workspace looks like/,/^```$/p' README.md)",
-      "Bash(git -c 'user.name=Gaurav Sah' -c user.email=sarangkkl2@gmail.com commit -q -m 'qa init writes the files an agent reads *)"
+      "Bash(git -c 'user.name=Gaurav Sah' -c user.email=sarangkkl2@gmail.com commit -q -m 'qa init writes the files an agent reads *)",
+      "Bash(python3 rdap_check.py ai google openai zqxjvbnmplkw qwvzxhjkpt kensa quinn probyn aiakos)"
     ],
     "additionalDirectories": [
       "/Users/gaurav/Documents/dreams/nkqa/browser-use/nkqa/execution",

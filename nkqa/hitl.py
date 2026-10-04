@@ -169,7 +169,7 @@ class HumanInTheLoop:
 
 	# --- the two gates ---------------------------------------------------------
 	# Plain methods, so any driver can call them: browser-use's Agent through the actions in
-	# build_tools(), an external agent through `qa mcp`. The words are the contract either way.
+	# build_tools(), an external agent through `kiwame mcp`. The words are the contract either way.
 
 	async def release_credential(self, name: str, page_url: str = '') -> Decision:
 		"""Make a credential available under its placeholder. The value never leaves this object."""

@@ -1,7 +1,7 @@
 """nkqa as an MCP server: the user's own coding agent is the brain and the hands.
 
-`qa mcp` speaks MCP over stdio to Claude Code, Codex or Cursor. The agent reads the appmap,
-writes scenarios, drives the browser one action at a time and reports verdicts; nkqa provides
+`kiwame mcp` speaks MCP over stdio to Claude Code, Codex or Cursor. The agent reads the appmap,
+writes scenarios, drives the browser one action at a time and reports verdicts; Kiwame provides
 the workspace, a recorded browser, the evidence, and the three gates - approval, permission,
 credentials - which reach the human through native dialogs the agent cannot answer.
 
@@ -98,7 +98,7 @@ class Session:
 		self.live = live
 		self._cast: asyncio.Task[None] | None = None
 		# Drafts per turn, so a 300-row import arrives as batches a human can review. 0 = no limit
-		# (`qa mcp`); the desktop sets one and resets the count at the start of every turn.
+		# (`kiwame mcp`); the desktop sets one and resets the count at the start of every turn.
 		self.draft_limit = 0
 		self.drafted = 0
 		self.ws: Workspace | None = None
@@ -184,7 +184,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@tool()
 	async def workspace_status() -> str:
-		"""Which nkqa workspace is active: app name, base URL, scenarios by state, runs recorded.
+		"""Which Kiwame workspace is active: app name, base URL, scenarios by state, runs recorded.
 		Call this first. If it reports no workspace, call list_workspaces then use_workspace,
 		or init_workspace for a new project."""
 		ws = session.ws
@@ -204,7 +204,7 @@ def build_server(session: Session) -> FastMCP:
 			'configured'
 			if session.config.mcp_server('jira')
 			else 'not configured. To enable reading tickets and filing bugs, the human runs '
-			'`qa connect jira --project KEY` then `qa auth jira` in a terminal, and restarts this client.'
+			'`kiwame connect jira --project KEY` then `kiwame auth jira` in a terminal, and restarts this client.'
 		)
 		return (
 			f'Workspace: {ws.root}\nApp: {cfg.app_name or "(unnamed)"} — {cfg.base_url or "(no base URL)"}\n'
@@ -215,7 +215,7 @@ def build_server(session: Session) -> FastMCP:
 	@tool()
 	async def list_workspaces() -> str:
 		"""Workspaces on this machine: the one the current directory is in, plus those recently
-		opened in the nkqa desktop app. Pick one with use_workspace(path)."""
+		opened in the Kiwame desktop app. Pick one with use_workspace(path)."""
 		found: dict[Path, str] = {}
 		here = workspace_mod.find()
 		if here is not None:
@@ -249,7 +249,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@tool()
 	async def init_workspace(path: str, app_name: str, base_url: str) -> str:
-		"""Create a new nkqa workspace layout in `path` (idempotent; never overwrites), then make
+		"""Create a new Kiwame workspace layout in `path` (idempotent; never overwrites), then make
 		it active. Use when the human wants to start testing an app that has no workspace yet."""
 		root = Path(path).expanduser().resolve()
 		if root in (Path.home(), Path('/')):
@@ -347,7 +347,7 @@ def build_server(session: Session) -> FastMCP:
 	async def start_run(scenario_id: str) -> str:
 		"""Open a recorded browser and start a run of an APPROVED scenario (refused for draft,
 		stale or deprecated; one run at a time). Returns the steps with expectations, preconditions,
-		out-of-scope items and what nkqa knows about the app, sign-in procedure included. Then
+		out-of-scope items and what Kiwame knows about the app, sign-in procedure included. Then
 		drive: browser_state -> one action (navigate/click/type_text/...) -> browser_state, verify
 		every EXPECT, and end with finish_run."""
 		ws = session.require_ws()
@@ -391,7 +391,7 @@ def build_server(session: Session) -> FastMCP:
 		opened = await driver.act('navigate', {'url': url}) if url else 'No URL given: navigate first.'
 		return _clean(
 			session,
-			f'Exploring; evidence under runs/{run_dir.name}/.\n{opened}\n\nWhat nkqa knows:\n'
+			f'Exploring; evidence under runs/{run_dir.name}/.\n{opened}\n\nWhat Kiwame knows:\n'
 			f'{appmap.context_for_run(ws) or "(nothing yet)"}\n\nEnd with finish_explore(summary).',
 		)
 
@@ -420,7 +420,7 @@ def build_server(session: Session) -> FastMCP:
 	async def type_text(index: int, text: str, clear: bool = True) -> str:
 		"""Type into the input with this index. For credentials NEVER type a real value: call
 		ask_credential(name) first, then pass the literal placeholder `<secret>name</secret>` as
-		`text` - nkqa substitutes the real value inside the browser and it never reaches you.
+		`text` - Kiwame substitutes the real value inside the browser and it never reaches you.
 		`{{unique}}` in the text becomes a per-run stamp: use it in names of things you create."""
 		return _clean(
 			session, await session.require_fresh().act('input', {'index': index, 'text': text, 'clear': clear})
@@ -633,7 +633,7 @@ def build_server(session: Session) -> FastMCP:
 
 	@server.prompt()
 	def plan(ask: str = '', ticket: str = '', area: str = '') -> str:
-		"""Draft test scenarios from what nkqa knows about the app (no browser)."""
+		"""Draft test scenarios from what Kiwame knows about the app (no browser)."""
 		want = ask.strip() or "the human's request in this conversation"
 		extra = f'\nRead the ticket first: read_ticket("{ticket}").' if ticket else ''
 		extra += f'\nPut every scenario under the area "{area}".' if area else ''

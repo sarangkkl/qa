@@ -38,7 +38,7 @@ def step_count(recording: Path) -> int | str:
 async def list_runs(ch: Channel, runs_dir: Path) -> int:
 	runs = recorded_runs(runs_dir)
 	if not runs:
-		await ch.log('No recorded tests yet. Record one: qa run <url>')
+		await ch.log('No recorded tests yet. Record one: kiwame run <url>')
 		return 0
 	await ch.log(f'\n{"TEST":<32} {"RECORDED":<18} STEPS')
 	for d in runs:
@@ -46,5 +46,5 @@ async def list_runs(ch: Channel, runs_dir: Path) -> int:
 		when = datetime.fromtimestamp(hist.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
 		steps = step_count(hist)
 		await ch.emit(Event('log', f'{d.name:<32} {when:<18} {steps}', {'run': d.name, 'when': when, 'steps': steps}))
-	await ch.log('\nReplay one:  qa replay <name>\nReplay all:  qa replay --all')
+	await ch.log('\nReplay one:  kiwame replay <name>\nReplay all:  kiwame replay --all')
 	return 0

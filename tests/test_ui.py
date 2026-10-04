@@ -94,7 +94,7 @@ def test_permission_choice_paths(tmp_path: Path) -> None:
 
 
 def test_the_gates_are_callable_without_browser_use(tmp_path: Path) -> None:
-	"""`qa mcp` calls the decision methods directly; the actions above are only wrappers over them."""
+	"""`kiwame mcp` calls the decision methods directly; the actions above are only wrappers over them."""
 	hitl = HumanInTheLoop(tmp_path / 'perms.json', FakeChannel(['n', 'hunter2']))
 	denied = asyncio.run(hitl.decide_permission('Wipe-DB', 'wipe'))
 	assert denied.ok is False and 'DENIED' in denied.content and 'wipe' in denied.memory

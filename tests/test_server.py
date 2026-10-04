@@ -736,7 +736,7 @@ def test_say_is_a_claude_turn(
 	assert args[args.index('--session-id') + 1] == chat_id and '--strict-mcp-config' in args
 	# The role goes in on every turn, and approving from chat text is not possible.
 	assert args[args.index('--append-system-prompt') + 1] == '# Your role'  # the brief, one line per arg here
-	assert 'You are the QA engineer' in args_file.read_text()
+	assert 'You are Kiwame, the QA engineer' in args_file.read_text()
 	assert 'mcp__nkqa__approve_scenario' in args[args.index('--disallowedTools') + 1]
 	assert args[args.index('--setting-sources') + 1] == 'project,local'
 	assert '/mcp' in args[args.index('--mcp-config') + 1] and TOKEN in args[args.index('--mcp-config') + 1]
@@ -1128,3 +1128,52 @@ def test_a_command_that_raises_still_returns_a_result(client: TestClient, monkey
 	assert 'jira fell over' in frames[-1]['error']
 	# ...and the human is told in the log too, not only in a field a UI might ignore.
 	assert any('jira fell over' in f.get('text', '') for f in frames if f['type'] == 'event')
+
+
+def test_library_tests_move_between_folders(client: TestClient, ws: Workspace) -> None:
+	headers = {'Authorization': f'Bearer {TOKEN}'}
+	assert client.post('/library/folders', params={'name': 'Smoke'}, headers=headers).json() == {'path': 'smoke'}
+	assert get(client, '/library').json()['folders'] == ['auth', 'smoke']
+	assert client.post('/library/move', params={'id': 'auth/login', 'folder': 'smoke'}, headers=headers).json() == {
+		'id': 'smoke/login'
+	}
+	refused = client.post('/library/move', params={'id': 'smoke/login', 'folder': '../..'}, headers=headers)
+	assert refused.status_code == 400
+	assert client.delete('/library/folders', params={'path': 'smoke'}, headers=headers).status_code == 400
+	assert client.delete('/library/tests', params={'id': 'smoke/login'}, headers=headers).json() == {'ok': True}
+	assert client.delete('/library/folders', params={'path': 'smoke'}, headers=headers).json() == {'ok': True}
+	# the webview preflights a DELETE; without it in CORS the delete buttons silently do nothing
+	preflight = {'Origin': 'tauri://localhost', 'Access-Control-Request-Method': 'DELETE'}
+	assert client.options('/library/tests', headers=preflight).status_code == 200
+
+
+def test_a_standby_server_takes_its_workspace_later(ws: Workspace) -> None:
+	"""The desktop pre-starts one of these, so opening a workspace skips the slow start entirely."""
+	import json
+	import subprocess
+	import sys
+	import urllib.request
+
+	proc = subprocess.Popen(
+		[sys.executable, '-m', 'nkqa.server.main', '--standby', '--exit-with-parent'],
+		stdin=subprocess.PIPE,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.DEVNULL,
+	)
+	assert proc.stdin and proc.stdout
+	try:
+		assert json.loads(proc.stdout.readline()) == {'standby': True}
+		proc.stdin.write(json.dumps({'workspace': str(ws.root)}).encode() + b'\n')
+		proc.stdin.flush()
+		handshake = json.loads(proc.stdout.readline())
+		assert handshake['ready'] and handshake['workspace'] == str(ws.root)
+		request = urllib.request.Request(
+			f'http://127.0.0.1:{handshake["port"]}/health', headers={'Authorization': f'Bearer {handshake["token"]}'}
+		)
+		with urllib.request.urlopen(request, timeout=10) as response:
+			assert json.loads(response.read())['busy'] is False
+		proc.stdin.close()  # the app going away
+		assert proc.wait(timeout=15) is not None, '--exit-with-parent still watches stdin after the request line'
+	finally:
+		if proc.poll() is None:
+			proc.kill()

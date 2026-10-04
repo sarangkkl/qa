@@ -1,4 +1,4 @@
-"""`qa vault ...` - the commands that manage stored credentials.
+"""`kiwame vault ...` - the commands that manage stored credentials.
 
 There is deliberately no `get`, and `set` never takes the value as an argument: a value
 leaves the keychain only into a running browser, and never into shell history.
@@ -21,7 +21,7 @@ async def _status(ctx: ShellContext, a: dict[str, Any]) -> int:
 	await ctx.ch.log(f'\nVault backend: {backend} · entry: {vault.service}')
 	if not rows:
 		await ctx.ch.log(f'\nNo credentials declared. List what this project needs in {ctx.ws.vault_file.name},')
-		await ctx.ch.log('then store each one:  qa vault set <name>')
+		await ctx.ch.log('then store each one:  kiwame vault set <name>')
 		return 0
 	await ctx.ch.log(f'\n{"NAME":<20} {"STORED":<16} {"GRANT":<14} ORIGIN')
 	missing = 0
@@ -32,7 +32,7 @@ async def _status(ctx: ShellContext, a: dict[str, Any]) -> int:
 			f'{row["name"]:<20} {row["stored"] or "— not set":<16} {row["grant"] or "—":<14} {row["origin"]}'
 		)
 	if missing:
-		await ctx.ch.log(f'\n{missing} credential(s) not set yet:  qa vault set <name>')
+		await ctx.ch.log(f'\n{missing} credential(s) not set yet:  kiwame vault set <name>')
 	else:
 		await ctx.ch.log('\nAll declared credentials are set.')
 	return 1 if missing else 0
@@ -42,7 +42,7 @@ async def _set(ctx: ShellContext, a: dict[str, Any]) -> int:
 	vault = _vault(ctx)
 	name = normalize(str(a.get('name', '')))
 	if not name:
-		await ctx.ch.log('Which credential?  qa vault set <name>')
+		await ctx.ch.log('Which credential?  kiwame vault set <name>')
 		return 2
 	if not vault.writable:
 		await ctx.ch.log(f'No OS keychain on this machine. Set {ENV_PREFIX}{name.upper()} in the environment instead.')
@@ -84,7 +84,7 @@ async def _grant(ctx: ShellContext, a: dict[str, Any]) -> int:
 		return 2
 	vault.grant(name, scenario)
 	where = f'scenario {scenario}' if scenario else 'any scenario'
-	await ctx.ch.log(f'✅ "{name}" may be used for {where} without asking. Revoke:  qa vault revoke {name}')
+	await ctx.ch.log(f'✅ "{name}" may be used for {where} without asking. Revoke:  kiwame vault revoke {name}')
 	return 0
 
 

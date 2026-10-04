@@ -1,4 +1,4 @@
-/** nkqa thinks with the user's own Claude Code. Until that works, this is the chat. */
+/** Kiwame thinks with the user's own Claude Code. Until that works, this is the chat. */
 
 import { CreditCard, Download, LogIn, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
@@ -27,7 +27,7 @@ export function ClaudeGate({
 	const [title, body, action] = !claude.path
 		? [
 				'Install Claude Code',
-				'nkqa runs on Claude Code: Claude does the planning and drives the browser, on your own Claude account. Install it, then come back here.',
+				'Kiwame runs on Claude Code: Claude does the thinking while Kiwame plans, tests and drives the browser, all on your own Claude account. Install it, then come back here.',
 				<button className="primary" onClick={() => void open('install')}>
 					<Download size={16} /> Install Claude Code
 				</button>,

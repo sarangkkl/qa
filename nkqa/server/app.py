@@ -153,7 +153,7 @@ class Guarded:
 
 def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 	# nkqa's MCP tools, served to the `claude` processes the chat spawns. In this process rather
-	# than a `qa mcp` child, so their asks reach this window's modal instead of an OS dialog, the
+	# than a `kiwame mcp` child, so their asks reach this window's modal instead of an OS dialog, the
 	# browser they drive streams to the live pane, and one workspace has exactly one owner.
 	relay = Relay()
 	mcp_session = mcp_server.Session(dialogs=relay, live=relay)
@@ -168,7 +168,7 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 			yield
 		await mcp_session.close()
 
-	app = FastAPI(title='nkqa sidecar', docs_url=None, redoc_url=None, lifespan=lifespan)
+	app = FastAPI(title='Kiwame sidecar', docs_url=None, redoc_url=None, lifespan=lifespan)
 	app.router.routes.append(Route('/mcp', endpoint=Guarded(StreamableHTTPASGIApp(mcp.session_manager))))
 	# The UI is always a different origin from this port - tauri://localhost in the app,
 	# http://127.0.0.1:1420 while developing - so without this every fetch is blocked by
@@ -177,7 +177,7 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=sorted(auth.ALLOWED_ORIGINS),
-		allow_methods=['GET', 'POST', 'OPTIONS'],
+		allow_methods=['GET', 'POST', 'DELETE', 'OPTIONS'],
 		allow_headers=['Authorization', 'Content-Type'],
 		max_age=600,
 	)
@@ -313,7 +313,39 @@ def create_app(ws: Workspace, port: int = 0) -> FastAPI:
 	def library_tests() -> dict[str, Any]:
 		from nkqa import library
 
-		return {'tests': library.entries(ws)}
+		return {'tests': library.entries(ws), 'folders': library.folders(ws)}
+
+	def organise(do: Any) -> Any:
+		try:
+			return do()
+		except ValueError as e:
+			raise HTTPException(status_code=400, detail=str(e)) from e
+
+	@app.post('/library/move', dependencies=guard)
+	def library_move(id: str, folder: str = '') -> dict[str, Any]:
+		from nkqa import library
+
+		return {'id': organise(lambda: library.move(ws, id, folder))}
+
+	@app.delete('/library/tests', dependencies=guard)
+	def library_delete(id: str) -> dict[str, Any]:
+		from nkqa import library
+
+		organise(lambda: library.delete(ws, id))
+		return {'ok': True}
+
+	@app.post('/library/folders', dependencies=guard)
+	def library_new_folder(name: str, parent: str = '') -> dict[str, Any]:
+		from nkqa import library
+
+		return {'path': organise(lambda: library.make_folder(ws, parent, name))}
+
+	@app.delete('/library/folders', dependencies=guard)
+	def library_remove_folder(path: str) -> dict[str, Any]:
+		from nkqa import library
+
+		organise(lambda: library.remove_folder(ws, path))
+		return {'ok': True}
 
 	@app.get('/chats', dependencies=guard)
 	def all_chats() -> dict[str, Any]:

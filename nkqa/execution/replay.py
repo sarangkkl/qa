@@ -111,7 +111,7 @@ async def replay(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, history_file:
 async def replay_all(ws: Workspace, hitl: HumanInTheLoop, ch: Channel, var_pairs: list[str]) -> int:
 	runs = replayable_runs(ws.runs_dir)
 	if not runs:
-		await ch.log('No replayable recordings yet. Record one: qa run <url>')
+		await ch.log('No replayable recordings yet. Record one: kiwame run <url>')
 		return 2
 	verdicts: dict[str, int] = {}
 	for d in runs:

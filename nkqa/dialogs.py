@@ -1,6 +1,6 @@
 """Native dialogs: how the product reaches the human when there is no terminal and no window.
 
-`qa mcp` runs headless under someone else's agent. Its asks - approve a scenario, release a
+`kiwame mcp` runs headless under someone else's agent. Its asks - approve a scenario, release a
 credential, allow a risky action - must reach a human and never the agent, so they go to an
 OS dialog. The agent only ever sees the outcome.
 
@@ -37,7 +37,7 @@ LABELS = {'y': 'allow once', 's': 'allow this session', 'a': 'allow always', 'n'
 CHOOSE = """on run argv
 	tell application "System Events"
 		activate
-		set picked to choose from list (rest of argv) with title "nkqa" with prompt (item 1 of argv) ¬
+		set picked to choose from list (rest of argv) with title "Kiwame" with prompt (item 1 of argv) ¬
 			OK button name "Choose" cancel button name "Deny"
 	end tell
 	if picked is false then return ""
@@ -47,7 +47,7 @@ end run"""
 SECRET = f"""on run argv
 	tell application "System Events"
 		activate
-		set r to display dialog (item 1 of argv) with title "nkqa needs a credential" ¬
+		set r to display dialog (item 1 of argv) with title "Kiwame needs a credential" ¬
 			default answer "" with hidden answer buttons {{"Cancel", "OK"}} default button "OK" ¬
 			giving up after {GIVE_UP}
 	end tell
@@ -68,7 +68,7 @@ end run"""
 TEXT = f"""on run argv
 	tell application "System Events"
 		activate
-		set r to display dialog (item 1 of argv) with title "nkqa" default answer "" ¬
+		set r to display dialog (item 1 of argv) with title "Kiwame" default answer "" ¬
 			buttons {{"Cancel", "OK"}} default button "OK" giving up after {GIVE_UP}
 	end tell
 	if gave up of r then return ""
@@ -89,7 +89,7 @@ if ($kind -eq 'confirm') {
 	exit
 }
 $f = New-Object Windows.Forms.Form
-$f.Text = 'nkqa'; $f.Width = 540; $f.Height = 260; $f.TopMost = $true; $f.StartPosition = 'CenterScreen'
+$f.Text = 'Kiwame'; $f.Width = 540; $f.Height = 260; $f.TopMost = $true; $f.StartPosition = 'CenterScreen'
 $l = New-Object Windows.Forms.Label; $l.Text = $env:NKQA_PROMPT; $l.SetBounds(12, 10, 500, 70)
 $f.Controls.Add($l)
 if ($kind -eq 'choice') {
@@ -142,13 +142,13 @@ def command(request: Ask, which: str) -> tuple[list[str], dict[str, str]]:
 	if which == 'windows':
 		env = {
 			'NKQA_KIND': request.kind,
-			'NKQA_PROMPT': request.prompt or 'nkqa',
+			'NKQA_PROMPT': request.prompt or 'Kiwame',
 			'NKQA_BODY': request.body or request.prompt,
 			'NKQA_OPTIONS': '\n'.join(options),
 		}
 		return [powershell(), '-NoProfile', '-NonInteractive', '-STA', '-Command', WINDOWS], env
 
-	title = ['--title=nkqa', f'--timeout={GIVE_UP}']
+	title = ['--title=Kiwame', f'--timeout={GIVE_UP}']
 	if request.kind == 'choice':
 		return ['zenity', '--list', *title, f'--text={request.prompt}', '--column=Choice', *options], {}
 	if request.kind == 'secret':
@@ -156,7 +156,7 @@ def command(request: Ask, which: str) -> tuple[list[str], dict[str, str]]:
 	if request.kind == 'confirm':
 		# zenity --question says yes with an exit code and prints nothing, so the shell prints
 		# the token the parser expects. Both values are argv, never spliced into the script.
-		script = 'zenity --question --title=nkqa --default-cancel --text="$2" --ok-label="$1" && echo Confirm'
+		script = 'zenity --question --title=Kiwame --default-cancel --text="$2" --ok-label="$1" && echo Confirm'
 		return ['sh', '-c', script, 'sh', 'Confirm', request.body or request.prompt], {}
 	return ['zenity', '--entry', *title, f'--text={request.prompt}'], {}
 
@@ -190,11 +190,11 @@ def tk_ask(request: Ask) -> str:
 	root.withdraw()
 	try:
 		if request.kind == 'confirm':
-			return 'y' if messagebox.askokcancel('nkqa', f'{request.prompt}\n\n{request.body}'.strip()) else ''
+			return 'y' if messagebox.askokcancel('Kiwame', f'{request.prompt}\n\n{request.body}'.strip()) else ''
 		prompt = request.prompt
 		if request.kind == 'choice':
 			prompt += '\n' + '\n'.join(label(o) for o in request.options)
-		answer = simpledialog.askstring('nkqa', prompt, show='*' if request.kind == 'secret' else '')
+		answer = simpledialog.askstring('Kiwame', prompt, show='*' if request.kind == 'secret' else '')
 		if request.kind == 'choice':
 			return (answer or '').strip().split()[0] if answer else ''
 		return answer or ''

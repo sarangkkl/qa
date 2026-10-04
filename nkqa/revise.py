@@ -43,10 +43,10 @@ scenario. Rules:
 async def revise(ws: Workspace, config: Config, ch: Channel, scenario_id: str, instruction: str) -> int:
 	s = scenarios_mod.find(ws.scenarios_dir, scenario_id)
 	if s is None:
-		await ch.log(f'No scenario "{scenario_id}". See:  qa scenarios')
+		await ch.log(f'No scenario "{scenario_id}". See:  kiwame scenarios')
 		return 2
 	if not instruction.strip():
-		await ch.log('Tell me how to revise it, e.g.  qa revise auth/login "make step 3 stricter"')
+		await ch.log('Tell me how to revise it, e.g.  kiwame revise auth/login "make step 3 stricter"')
 		return 2
 	llm = resolve_llm(config, 'planner')
 	if llm is None:
@@ -73,5 +73,5 @@ async def revise(ws: Workspace, config: Config, ch: Channel, scenario_id: str, i
 
 	await ch.log(f'📝 {s.id}: {r.changes or "revised"} ({len(s.steps)} steps)')
 	if was_approved:
-		await ch.log(f'⚠️  Approval invalidated - the content changed. Re-approve to run:  qa approve {s.id}')
+		await ch.log(f'⚠️  Approval invalidated - the content changed. Re-approve to run:  kiwame approve {s.id}')
 	return 0

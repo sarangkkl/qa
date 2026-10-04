@@ -82,7 +82,11 @@ A loopback port is reachable by every browser tab on the machine.
 | `GET /chats` | `chats`: id, title, updated, turn count — newest first. These are **Claude Code's own sessions** for the workspace folder (`~/.claude/projects/<cwd, non-alphanumerics → '-'>/*.jsonl`), terminal ones included. Title: one set with `/rename`, else Claude's `ai-title`, else the one the desktop asked Claude for (`.nkqa/chat-titles.json` — `claude -p` writes none itself), else the first message. |
 | `GET /chats/{id}` | `id`, `title`, `messages`: the user/assistant messages from the session file, in the same shape `claude -p --output-format stream-json` emits, so one renderer draws both. `404` if unknown or not a session id. |
 | `POST /imports?name=<file>` | Upload a test case sheet as the raw request body (`.xlsx`, `.csv`, `.tsv`, at most 20 MB). Saved under `imports/` with a name the server makes (never overwriting); an `.xlsx` also becomes one CSV per sheet with test cases, merged cells filled down. Returns `path`, `sheets` (`name`, `csv`, `rows`, `columns`) and `note`: the `[Attached: …]` line the chat sends in front of the message so Claude knows where the CSV is. `400` with the reason for anything it will not take. |
-| `GET /library` | `tests`: the Library — scenarios whose recording is valid for their current approval. Each: `id`, `title`, `folder` (the id's path), `steps` (recorded), `saved_at`, `recorded_from` (the Claude run), `last_run`, `last_verdict`. |
+| `GET /library` | `tests` and `folders` (every folder on disk, empty ones included): the Library — scenarios whose recording is valid for their current approval. Each: `id`, `title`, `folder` (the id's path), `steps` (recorded), `saved_at`, `recorded_from` (the Claude run), `last_run`, `last_verdict`. |
+| `POST /library/move?id=&folder=` | Moves a test (scenario + recording) into an existing folder (`''` = top level) → `{id}` (the new id). `400` with the reason on a clash, a missing folder, or a path outside `scenarios/`. |
+| `DELETE /library/tests?id=` | Deletes the test's scenario and recording; its runs stay. |
+| `POST /library/folders?parent=&name=` | Makes a folder (name slugified, with a `.gitkeep`) → `{path}`. |
+| `DELETE /library/folders?path=` | Removes a folder; `400` while any scenario is still under it. |
 | `POST /claude/login` | Starts `claude auth login`, which opens the browser sign-in. Returns at once; re-check `/health`. |
 | `POST /open/{install\|upgrade}` | Opens one of two fixed pages in the system browser. Nothing else is accepted. |
 | `/mcp` | nkqa's MCP tools over streamable HTTP, for the `claude` processes chat spawns. Bearer token required, like everything else. |
@@ -126,7 +130,7 @@ is not in it. `tier` says which of the two slots a model is the natural pick for
 
 `defaults` is what "switch provider" fills both slots with. Use it rather than re-deriving it
 from the order of `models`: the server decides this, and a client that guesses will sooner or
-later disagree with what `qa set-model --provider` does. Every id in `defaults` is guaranteed to
+later disagree with what `kiwame set-model --provider` does. Every id in `defaults` is guaranteed to
 appear in `models` with a matching `tier` — a default is the one model nobody picks on purpose,
 so a wrong one stays invisible until every call fails.
 
@@ -168,7 +172,7 @@ code are recorded as turns, so a transcript has no unexplained holes where work 
 
 `say` is what the Chat view sends: one turn of the user's own **Claude Code**, spawned as
 `claude -p --output-format stream-json` in the workspace folder and pointed at this sidecar's
-`/mcp` — so nkqa calls no model and needs no API key. It runs as a job like any command and
+`/mcp` — so Kiwame calls no model and needs no API key. It runs as a job like any command and
 can be cancelled (the process is killed). Omit `chat` and the server makes a session id and
 tells you (a `chat` frame, before Claude says anything); pass one to continue it with
 `--resume`. Claude gets nkqa's tools plus read-only `Read`/`Glob`/`Grep`; shell, edits and web

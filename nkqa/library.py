@@ -17,7 +17,7 @@ from nkqa.execution.report import latest_run_dir, read_results
 from nkqa.hitl import HumanInTheLoop
 from nkqa.scenarios import Scenario
 from nkqa.ui import Channel
-from nkqa.workspace import Workspace
+from nkqa.workspace import Workspace, slugify
 
 
 def load(ws: Workspace, scenario_id: str) -> Recording | None:
@@ -153,3 +153,84 @@ def refusal(s: Scenario, verdict: str, approved_hash: str, replay: bool, proven:
 def write(path: Path, recording: Recording) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(recording.model_dump_json(indent=1), encoding='utf-8')
+
+
+# --- organising: human-only, from the desktop; Claude has no tool for any of it ---------------
+
+
+def _inside(ws: Workspace, rel: str) -> Path:
+	"""A path under scenarios/, or ValueError - never anywhere else on disk."""
+	parts = rel.strip('/').split('/') if rel.strip('/') else []
+	if any(p in ('', '.', '..') or p.startswith('.') for p in parts) or rel.startswith(('/', '\\')):
+		raise ValueError(f'"{rel}" is not a folder or test in the Library.')
+	return ws.scenarios_dir.joinpath(*parts)
+
+
+def folders(ws: Workspace) -> list[str]:
+	"""Every folder on disk, empty ones included - that is what lets a QA make one ahead of time."""
+	if not ws.scenarios_dir.is_dir():
+		return []
+	return sorted(
+		p.relative_to(ws.scenarios_dir).as_posix()
+		for p in ws.scenarios_dir.rglob('*')
+		if p.is_dir() and not any(part.startswith('.') for part in p.relative_to(ws.scenarios_dir).parts)
+	)
+
+
+def make_folder(ws: Workspace, parent: str, name: str) -> str:
+	base = _inside(ws, parent)
+	if parent.strip('/') and not base.is_dir():
+		raise ValueError(f'No folder "{parent}".')
+	slug = slugify(name)
+	path = base / slug
+	if path.exists():
+		raise ValueError(f'"{path.relative_to(ws.scenarios_dir).as_posix()}" already exists.')
+	path.mkdir(parents=True)
+	(path / '.gitkeep').touch()  # git keeps no empty folders
+	return path.relative_to(ws.scenarios_dir).as_posix()
+
+
+def remove_folder(ws: Workspace, folder: str) -> None:
+	path = _inside(ws, folder)
+	if not folder.strip('/') or not path.is_dir():
+		raise ValueError(f'No folder "{folder}".')
+	inside = list(path.rglob('*.md'))
+	if inside:
+		raise ValueError(f'"{folder}" still holds {len(inside)} scenario(s); move or delete them first.')
+	for p in sorted(path.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+		if p.is_file():
+			p.unlink()
+		else:
+			p.rmdir()
+	path.rmdir()
+
+
+def move(ws: Workspace, test_id: str, folder: str) -> str:
+	"""Move a test into a folder; its approval and recording come along (the hash has no id in it)."""
+	source = _inside(ws, test_id)
+	md = source.with_suffix('.md')
+	if not md.is_file():
+		raise ValueError(f'No test "{test_id}".')
+	target_dir = _inside(ws, folder)
+	if not target_dir.is_dir():
+		raise ValueError(f'No folder "{folder}".')
+	new_id = '/'.join(p for p in (folder.strip('/'), source.name) if p)
+	if new_id == test_id:
+		return new_id
+	if (target_dir / md.name).exists():
+		raise ValueError(f'"{new_id}" already exists.')
+	recording = load(ws, test_id)
+	md.rename(target_dir / md.name)
+	ws.recording_file(test_id).unlink(missing_ok=True)
+	if recording:
+		write(ws.recording_file(new_id), recording.model_copy(update={'scenario_id': new_id}))
+	return new_id
+
+
+def delete(ws: Workspace, test_id: str) -> None:
+	"""The test and its scenario go; its runs stay in runs/, as evidence."""
+	md = _inside(ws, test_id).with_suffix('.md')
+	if not md.is_file():
+		raise ValueError(f'No test "{test_id}".')
+	md.unlink()
+	ws.recording_file(test_id).unlink(missing_ok=True)

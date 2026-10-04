@@ -40,7 +40,7 @@ def banner(ws: Workspace, config: Config) -> str:
 
 	lines = [
 		'',
-		paint(f'  nkqa {pkg_version("nkqa")}', 'bold') + paint(f' · {config.app_name} ({where})', 'cyan'),
+		paint(f'  Kiwame {pkg_version("nkqa")}', 'bold') + paint(f' · {config.app_name} ({where})', 'cyan'),
 		paint(f'  appmap: {appmap_files} files · scenarios: {summary} · runs: {runs}', 'dim'),
 		paint(f'  models: {roles}', 'dim'),
 		'',

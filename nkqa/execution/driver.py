@@ -1,6 +1,6 @@
 """Drive the browser without a model: an external agent decides, nkqa executes and records.
 
-This is what `qa mcp` runs a scenario with. browser-use still does the work - the same
+This is what `kiwame mcp` runs a scenario with. browser-use still does the work - the same
 `BrowserSession`, the same action registry, the same `<secret>key</secret>` substitution at
 the DOM - but nothing here ever calls an LLM. Every action becomes a step in `steps.json`
 with a screenshot, so a run driven from Claude Code leaves the same kind of evidence as one

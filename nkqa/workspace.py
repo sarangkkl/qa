@@ -22,7 +22,7 @@ RECENTS_FILE = 'workspaces.json'
 OVERVIEW_STUB = """\
 # App overview
 
-<!-- The agent's index into everything it knows. Filled by hand, by runs, or by `qa init --crawl` (Phase 4). -->
+<!-- The agent's index into everything it knows. Filled by hand, by runs, or by `kiwame init --crawl` (Phase 4). -->
 
 ## What this app does
 

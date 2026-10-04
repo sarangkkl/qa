@@ -55,9 +55,17 @@ struct Sidecar {
 	child: CommandChild,
 }
 
+/// A server started ahead of time with `--standby`: fully loaded, waiting on stdin for the
+/// workspace it should serve. Opening a workspace hands it one instead of starting from cold.
+struct Standby {
+	rx: tauri::async_runtime::Receiver<CommandEvent>,
+	child: CommandChild,
+}
+
 #[derive(Default)]
 pub struct Sidecars {
 	running: Mutex<HashMap<String, Sidecar>>,
+	standby: Mutex<Option<Standby>>,
 	// Which window is showing which workspace. Closing one window must stop only what no
 	// other window still holds - two workspaces open at once is the point, and Cmd+W on one
 	// of them used to kill both.
@@ -68,6 +76,90 @@ pub struct Sidecars {
 	// impatient second click during the ~20 s boot - spawns a second sidecar for the same
 	// workspace, because nothing lands in `running` until the handshake arrives.
 	gate: tokio::sync::Mutex<()>,
+}
+
+/// The server, spawned from the app's resources.
+///
+/// It ships as a PyInstaller *onedir* folder (`nkqa-server` plus `_internal/`), not a single
+/// file: a onefile build unpacks ~200 MB into a temp dir on every launch, which macOS then
+/// rescans - 23-26 s per workspace open, against ~2.5 s for the folder. Tauri's sidecar API only
+/// copies single files, so the folder travels as a resource and is spawned by path.
+fn server_command(app: &tauri::AppHandle) -> Result<tauri_plugin_shell::process::Command, String> {
+	let dir = app
+		.path()
+		.resource_dir()
+		.map_err(|e| format!("cannot locate the app's resources: {e}"))?;
+	let exe = dir
+		.join("server")
+		.join(format!("nkqa-server{}", std::env::consts::EXE_SUFFIX));
+	if !exe.is_file() {
+		return Err(format!("cannot find the bundled nkqa-server at {}", exe.display()));
+	}
+	Ok(app.shell().command(exe))
+}
+
+/// Keep one loaded server waiting for the next workspace. Started when the app opens (so the
+/// slow part - loading Python and, on a first install, macOS checking every library - happens
+/// while the human is still on the start screen) and again each time one is used.
+fn start_standby(app: &tauri::AppHandle) {
+	let Some(state) = app.try_state::<Sidecars>() else { return };
+	let Ok(command) = server_command(app) else { return };
+	let Ok((rx, child)) = command.args(["--standby", "--exit-with-parent"]).spawn() else { return };
+	let old = match state.standby.lock() {
+		Ok(mut slot) => slot.replace(Standby { rx, child }),
+		Err(_) => {
+			stop(child);
+			None
+		}
+	};
+	if let Some(old) = old {
+		stop(old.child);
+	}
+}
+
+/// Read the server's handshake: its one line of JSON on stdout. A standby says
+/// `{"standby": true}` first, which is skipped. Anything on stderr is kept for the error message,
+/// because a sidecar that dies silently is the worst thing this window can do.
+async fn read_handshake(
+	mut rx: tauri::async_runtime::Receiver<CommandEvent>,
+	child: CommandChild,
+) -> Result<(Handshake, tauri::async_runtime::Receiver<CommandEvent>, CommandChild), String> {
+	let mut stderr = String::new();
+	let deadline = std::time::Instant::now() + HANDSHAKE_TIMEOUT;
+	loop {
+		if std::time::Instant::now() > deadline {
+			stop(child);
+			return Err(format!(
+				"nkqa-server did not report ready within {}s.\n{stderr}",
+				HANDSHAKE_TIMEOUT.as_secs()
+			));
+		}
+		match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+			Ok(Some(CommandEvent::Stdout(bytes))) => {
+				let line = String::from_utf8_lossy(&bytes);
+				let line = line.trim();
+				if line.is_empty() || line.starts_with("{\"standby\"") {
+					continue;
+				}
+				return match serde_json::from_str::<Handshake>(line) {
+					Ok(parsed) => Ok((parsed, rx, child)),
+					Err(e) => {
+						stop(child);
+						Err(format!("could not read the handshake ({e}): {line}"))
+					}
+				};
+			}
+			Ok(Some(CommandEvent::Stderr(bytes))) => {
+				stderr.push_str(&String::from_utf8_lossy(&bytes));
+			}
+			Ok(Some(CommandEvent::Terminated(status))) => {
+				return Err(format!("nkqa-server exited ({:?}).\n{stderr}", status.code));
+			}
+			Ok(Some(_)) => continue,
+			Ok(None) => return Err(format!("nkqa-server closed its output.\n{stderr}")),
+			Err(_) => continue, // one second with nothing said; keep waiting until the deadline
+		}
+	}
 }
 
 /// Stop a sidecar and everything it forked.
@@ -172,6 +264,9 @@ impl Sidecars {
 			for (_, sidecar) in running.drain() {
 				stop(sidecar.child);
 			}
+		}
+		if let Some(standby) = self.standby.lock().ok().and_then(|mut s| s.take()) {
+			stop(standby.child);
 		}
 	}
 }
@@ -374,63 +469,48 @@ async fn sidecar_connect(
 		return Ok(connection);
 	}
 
-	let mut args: Vec<String> = vec![
-		"--workspace".into(),
-		workspace.clone(),
-		"--exit-with-parent".into(),
-	];
-	if let Some(options) = &init {
-		args.push("--init".into());
-		args.push("--app-name".into());
-		args.push(options.app_name.clone());
-		args.push("--base-url".into());
-		args.push(options.base_url.clone());
-	}
-
-	let (mut rx, child) = app
-		.shell()
-		.sidecar("nkqa-server")
-		.map_err(|e| format!("cannot find the bundled nkqa-server: {e}"))?
-		.args(args)
-		.spawn()
-		.map_err(|e| format!("could not start nkqa-server: {e}"))?;
-
-	// Read exactly one line of stdout. Anything on stderr is kept for the error message,
-	// because a sidecar that dies silently is the worst thing this window can do.
-	let mut stderr = String::new();
-	let deadline = std::time::Instant::now() + HANDSHAKE_TIMEOUT;
-	let handshake = loop {
-		if std::time::Instant::now() > deadline {
-			stop(child);
-			return Err(format!(
-				"nkqa-server did not report ready within {}s.\n{stderr}",
-				HANDSHAKE_TIMEOUT.as_secs()
-			));
+	// The standby is already loaded: hand it the workspace. If there is none, or it died
+	// waiting, start one from cold the way it always worked.
+	let standby = state.standby.lock().map_err(|e| e.to_string())?.take();
+	let adopted = match standby {
+		Some(mut standby) => {
+			let request = serde_json::json!({
+				"workspace": workspace,
+				"init": init.as_ref().map(|o| serde_json::json!({"app_name": o.app_name, "base_url": o.base_url})),
+			});
+			match standby.child.write(format!("{request}\n").as_bytes()) {
+				Ok(()) => read_handshake(standby.rx, standby.child).await.ok(),
+				Err(_) => {
+					stop(standby.child);
+					None
+				}
+			}
 		}
-		match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
-			Ok(Some(CommandEvent::Stdout(bytes))) => {
-				let line = String::from_utf8_lossy(&bytes);
-				let line = line.trim();
-				if line.is_empty() {
-					continue;
-				}
-				match serde_json::from_str::<Handshake>(line) {
-					Ok(parsed) => break parsed,
-					Err(e) => {
-						stop(child);
-						return Err(format!("could not read the handshake ({e}): {line}"));
-					}
-				}
+		None => None,
+	};
+	// Replace it now, so the next window opens just as fast.
+	start_standby(&app);
+
+	let (handshake, mut rx, child) = match adopted {
+		Some(ready) => ready,
+		None => {
+			let mut args: Vec<String> = vec![
+				"--workspace".into(),
+				workspace.clone(),
+				"--exit-with-parent".into(),
+			];
+			if let Some(options) = &init {
+				args.push("--init".into());
+				args.push("--app-name".into());
+				args.push(options.app_name.clone());
+				args.push("--base-url".into());
+				args.push(options.base_url.clone());
 			}
-			Ok(Some(CommandEvent::Stderr(bytes))) => {
-				stderr.push_str(&String::from_utf8_lossy(&bytes));
-			}
-			Ok(Some(CommandEvent::Terminated(status))) => {
-				return Err(format!("nkqa-server exited ({:?}).\n{stderr}", status.code));
-			}
-			Ok(Some(_)) => continue,
-			Ok(None) => return Err(format!("nkqa-server closed its output.\n{stderr}")),
-			Err(_) => continue, // one second with nothing said; keep waiting until the deadline
+			let (rx, child) = server_command(&app)?
+				.args(args)
+				.spawn()
+				.map_err(|e| format!("could not start nkqa-server: {e}"))?;
+			read_handshake(rx, child).await?
 		}
 	};
 
@@ -472,9 +552,9 @@ async fn sidecar_connect(
 	remember(&app, &workspace);
 	// Open Recent is a snapshot of what `remember` just wrote.
 	menu::refresh(&app);
-	// The Window menu lists windows by title, and "nkqa" three times is useless. Set it here
+	// The Window menu lists windows by title, and "Kiwame" three times is useless. Set it here
 	// rather than from TS: no new ACL permission, and it lands with the handshake.
-	let _ = window.set_title(&format!("{} — nkqa", folder_name(&workspace)));
+	let _ = window.set_title(&format!("{} — Kiwame", folder_name(&workspace)));
 	Ok(connection)
 }
 
@@ -489,6 +569,7 @@ pub fn run() {
 		.setup(|app| {
 			let handle = app.handle();
 			handle.set_menu(menu::build(handle)?)?;
+			start_standby(handle);
 			Ok(())
 		})
 		.on_menu_event(menu::on_event)
@@ -509,7 +590,7 @@ pub fn run() {
 			}
 		})
 		.build(tauri::generate_context!())
-		.expect("error while building nkqa")
+		.expect("error while building Kiwame")
 		.run(|app, event| {
 			// The backstop: quitting can outrun the per-window Destroyed events, and a sidecar
 			// left running is holding a real browser.

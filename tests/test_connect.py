@@ -31,7 +31,7 @@ def test_connecting_jira_makes_it_real(ws: Workspace) -> None:
 	assert spec is not None
 	assert spec.command == 'npx'
 	assert 'mcp-remote' in ' '.join(spec.args)
-	assert 'qa auth jira' in ch.out, 'connecting is only half of it - say what comes next'
+	assert 'kiwame auth jira' in ch.out, 'connecting is only half of it - say what comes next'
 
 
 def test_the_agent_still_cannot_file_bugs_by_itself(ws: Workspace) -> None:
